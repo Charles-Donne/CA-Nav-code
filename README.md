@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>Constraint-Aware Zero-Shot Vision-Language Navigation in Continuous Environments</h1>
+<h1>Constraint-Aware Zero-Shot Vision-Language Navigation in Continuous Environments (TPAMI 2025)</h1>
 
 <div>
     <a href='https://github.com/Chenkehan21' target='_blank'>Kehan Chen*</a>;
