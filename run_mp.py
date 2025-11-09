@@ -19,66 +19,109 @@ from vlnce_baselines.config.default import get_config
 from vlnce_baselines.common.utils import seed_everything
     
 
-def run_exp(exp_name: str, exp_config: str, 
-            run_type: str, nprocesses: int, opts=None) -> None:
-    r"""Runs experiment given mode and config
-
-    Args:
-        exp_config: path to config file.
-        run_type: "train" or "eval.
-        opts: list of strings of additional config options.
-
-    Returns:
-        None.
-    """
+def run_exp(exp_name, exp_config, run_type, nprocesses, opts):
+    # ① 加载基础配置
     config = get_config(exp_config, opts)
-    config.defrost()
-    config.TENSORBOARD_DIR += exp_name
-    config.CHECKPOINT_FOLDER += exp_name
-    config.EVAL_CKPT_PATH_DIR += exp_name
-    config.RESULTS_DIR += exp_name
-    config.VIDEO_DIR += exp_name
-    config.LOG_FILE = exp_name + '_' + config.LOG_FILE
-    config.freeze()
     
+    # ② 修改配置，添加实验名称后缀
+    config.defrost()  # 解冻配置（允许修改）
+    config.TENSORBOARD_DIR += exp_name      # data/tensorboard_dirs/exp_1
+    config.CHECKPOINT_FOLDER += exp_name    # data/checkpoints/exp_1
+    config.EVAL_CKPT_PATH_DIR += exp_name   # data/checkpoints/exp_1
+    config.RESULTS_DIR += exp_name          # data/logs/eval_results/exp_1
+    config.VIDEO_DIR += exp_name            # data/logs/video/exp_1
+    config.LOG_FILE = exp_name + '_' + config.LOG_FILE  # exp_1_log.txt
+    config.freeze()  # 冻结配置（禁止修改）
+    
+    # ③ 创建必要目录
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
     os.makedirs(config.EVAL_CKPT_PATH_DIR, exist_ok=True)
     os.system("mkdir -p data/logs/running_log")
+    
+    # ④ 设置日志
     logger.add_filehandler('data/logs/running_log/' + config.LOG_FILE)
     logger.info(f"hyper parameters:\n{config.EVAL}")
     logger.info(f"llm reply file: {config.TASK_CONFIG.DATASET.LLM_REPLYS_PATH}")
-    
     # dataset split, start multi-processes
-    num_devices = torch.cuda.device_count()
-    print(f'num devices: {num_devices}, num processes: {nprocesses}')
+
+    # ① 获取可用 GPU 数量
+    num_devices = torch.cuda.device_count()  # 8 个 GPU
+    print(f'num devices: {num_devices}, num processes: {nprocesses}')  # 8, 16
+    
+    # ② 加载 LLM 回复数据集
     with open(config.TASK_CONFIG.DATASET.LLM_REPLYS_PATH, 'r') as f:
         llm_reply_dataset = json.load(f)
-    episode_ids = list(llm_reply_dataset.keys())
+    
+    # ③ 提取所有 episode ID
+    episode_ids = list(llm_reply_dataset.keys())  
+    # 例如: ['1001', '1002', '1003', ..., '2000']  (假设 1000 个 episodes)
+    
+    # ④ 轮询分片 (Round-Robin)
     split_episode_ids = [episode_ids[i::nprocesses] for i in range(nprocesses)]
+    # 进程 0: [1001, 1017, 1033, ...]  (每隔 16 个取一个)
+    # 进程 1: [1002, 1018, 1034, ...]
+    # ...
+    # 进程 15: [1016, 1032, 1048, ...]
 
     configs = []
     for i, ep_ids in enumerate(split_episode_ids):
+        # ① 深拷贝配置（避免进程间干扰）
         shared_config = deepcopy(config)
         shared_config.defrost()
-        device_num = i % num_devices
-        shared_config.local_rank = i
-        shared_config.world_size = nprocesses
-        shared_config.TORCH_GPU_ID = device_num
+        
+        # ② 分配 GPU（循环分配）
+        device_num = i % num_devices  # 16 个进程 → 8 个 GPU
+        # 进程 0 → GPU 0
+        # 进程 1 → GPU 1
+        # ...
+        # 进程 8 → GPU 0 (重新循环)
+        
+        # ③ 设置进程特定参数
+        shared_config.local_rank = i              # 进程编号 (0-15)
+        shared_config.world_size = nprocesses     # 总进程数 (16)
+        shared_config.TORCH_GPU_ID = device_num   # PyTorch 使用的 GPU
         shared_config.TORCH_GPU_IDS = [device_num]
-        shared_config.SIMULATOR_GPU_IDS = [device_num]
+        shared_config.SIMULATOR_GPU_IDS = [device_num]  # Habitat 模拟器 GPU
+        
+        # ④ 分配该进程要处理的 episodes
         shared_config.TASK_CONFIG.DATASET.EPISODES_ALLOWED = ep_ids
+        
         shared_config.freeze()
         configs.append(shared_config)
     
+    # ① 创建进程池 (16 个进程)
     pool = Pool(processes=nprocesses)
+    
+    # ② 并行执行 worker 函数
     pool.map(worker, configs)
-    pool.close()
-    pool.join()
+    # 等价于:
+    # for config in configs:
+    #     worker(config)  # 但是是并行的
+    
+    # ③ 关闭进程池
+    pool.close()  # 不再接受新任务
+    pool.join()   # 等待所有任务完成
+
+    # ① 找到所有进程输出的结果文件
     fns = glob.glob(config.CHECKPOINT_FOLDER + '/stats_ep_ckpt_*.json')
+    # 匹配文件:
+    # - stats_ep_ckpt_val_unseen_r0_w16.json   (进程 0 的结果)
+    # - stats_ep_ckpt_val_unseen_r1_w16.json   (进程 1 的结果)
+    # - ...
+    # - stats_ep_ckpt_val_unseen_r15_w16.json  (进程 15 的结果)
+    
+    # ② 合并所有 episode 的结果
     summary = {}
     for fn in fns:
         with open(fn, 'r') as f:
             summary.update(json.load(f))
+    # summary = {
+    #   '1001': {'success': 1.0, 'spl': 0.85, ...},
+    #   '1002': {'success': 0.0, 'spl': 0.00, ...},
+    #   ...
+    # }
+    
+    # ③ 初始化指标累积列表
     summary_metrics = {
         "steps_taken": [],
         "distance_to_goal": [],
@@ -89,15 +132,28 @@ def run_exp(exp_name: str, exp_config: str,
         "ndtw": [],
         "sdtw": [],
     }
+    
+    # ④ 收集所有 episode 的指标
     for epid, metric in summary.items():
         for k, v in metric.items():
             summary_metrics[k].append(v)
+    
+    # ⑤ 计算平均指标
     for k, v in summary_metrics.items():
         summary_metrics[k] = np.mean(v)
+    
+    # ⑥ 打印并保存最终结果
     pprint(summary_metrics)
+    # {
+    #   'success': 0.45,
+    #   'spl': 0.38,
+    #   'ndtw': 0.52,
+    #   ...
+    # }
+    
     with open(config.CHECKPOINT_FOLDER + '/stats_ckpt_val_unseen.json', 'w') as f:
         json.dump(summary_metrics, f, indent=2)
-
+        
 def worker(config):
     seed_everything(config.TASK_CONFIG.SEED)
     torch.backends.cudnn.benchmark = False
