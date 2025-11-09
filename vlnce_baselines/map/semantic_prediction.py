@@ -113,11 +113,16 @@ class GroundedSAM(Segment):
         )
         # t2 = time.time()
         detections = self._process_detections(detections)
-        for _, _, confidence, class_id, _ in detections:
+        
+        # 兼容不同版本的 supervision：使用属性而不是迭代
+        for i in range(len(detections.xyxy)):
+            confidence = detections.confidence[i] if detections.confidence is not None else 0.0
+            class_id = detections.class_id[i] if detections.class_id is not None else None
+            
             if class_id is not None:
                 labels.append(f"{classes[class_id]} {confidence:0.2f}")
             else:
-                labels.append(f"unknow {confidence:0.2f}")
+                labels.append(f"unknown {confidence:0.2f}")
         # t3 = time.time()
         detections.mask = self._segment(
             sam_predictor=self.sam_predictor,
