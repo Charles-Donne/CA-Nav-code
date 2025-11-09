@@ -132,23 +132,8 @@ class MinimalMappingTest:
         sem_masks = final_masks.transpose(1, 2, 0)  # (480, 640, N)
         state = np.concatenate((state[:3], state[3:4], sem_masks.transpose(2,0,1)), axis=0)  # (4+N, 480, 640)
         
-        # 下采样到 160x160
-        from torchvision import transforms
-        trans = transforms.Compose([
-            transforms.ToPILImage(), 
-            transforms.Resize((120, 160), interpolation=Image.NEAREST)
-        ])
-        
-        state_resized = []
-        for i in range(state.shape[0]):
-            if i < 3:  # RGB
-                state_resized.append(np.array(trans(state[i].astype(np.uint8))))
-            else:
-                # Depth 和 Semantic
-                resized = state[i, 2::4, 2::4]  # 下采样 4x
-                state_resized.append(resized)
-        
-        state = np.stack(state_resized, axis=0)  # (4+N, 120, 160)
+        # 不需要 resize，直接使用原始尺寸（与配置文件中的 FRAME_WIDTH/HEIGHT 一致）
+        # state 已经是 (4+N, 480, 640)，符合 mapping 模块的预期
         
         return state, rgb, depth, annotated_image
     
