@@ -27,7 +27,12 @@ from vlnce_baselines.common.utils import get_device
 from vlnce_baselines.map.semantic_prediction import GroundedSAM
 from vlnce_baselines.map.mapping import Semantic_Mapping
 from vlnce_baselines.utils.data_utils import OrderedSet
-from vlnce_baselines.utils.constant import base_classes
+from vlnce_baselines.utils.constant import base_classes, map_channels
+from vlnce_baselines.utils.map_utils import *
+
+# 图像处理库
+import cv2
+from skimage.morphology import remove_small_objects, binary_closing, disk
 
 
 class MinimalMappingTest:
@@ -137,6 +142,62 @@ class MinimalMappingTest:
         
         return state, rgb, depth, annotated_image
     
+    def _process_map(self, step: int, full_map: np.ndarray, kernel_size: int=3) -> tuple:
+        """处理语义地图，提取导航相关信息（参考 ZS_Evaluator_mp.py）
+        
+        Args:
+            step: 当前步数
+            full_map: (N+4, H, W) 语义地图
+            kernel_size: 形态学操作的核大小
+            
+        Returns:
+            traversible: 可穿越区域
+            floor: 地板区域
+            frontiers: 边界区域（探索边缘）
+        """
+        # 区分可导航和不可导航的类别
+        navigable_index = process_navigable_classes(self.detected_classes)
+        not_navigable_index = [i for i in range(len(self.detected_classes)) if i not in navigable_index]
+        full_map = remove_small_objects(full_map.astype(bool), min_size=64)
+        
+        # 提取地图通道
+        obstacles = full_map[0, ...].astype(bool)  # 障碍物
+        explored_area = full_map[1, ...].astype(bool)  # 已探索区域
+        objects = np.sum(full_map[map_channels:, ...][not_navigable_index], axis=0).astype(bool) if len(not_navigable_index) > 0 else np.zeros_like(obstacles)
+        
+        # 形态学处理（闭运算，填充小孔）
+        selem = disk(kernel_size)
+        obstacles_closed = binary_closing(obstacles, selem=selem)
+        objects_closed = binary_closing(objects, selem=selem)
+        navigable = np.logical_or.reduce(full_map[map_channels:, ...][navigable_index]) if len(navigable_index) > 0 else np.zeros_like(obstacles)
+        navigable = np.logical_and(navigable, np.logical_not(objects))
+        navigable_closed = binary_closing(navigable, selem=selem)
+        
+        # 计算不可穿越区域
+        untraversible = np.logical_or(objects_closed, obstacles_closed)
+        untraversible[navigable_closed == 1] = 0
+        untraversible = remove_small_objects(untraversible, min_size=64)
+        untraversible = binary_closing(untraversible, selem=disk(3))
+        traversible = np.logical_not(untraversible)
+
+        # 计算地板区域
+        free_mask = 1 - np.logical_or(obstacles, objects)
+        free_mask = np.logical_or(free_mask, navigable)
+        floor = explored_area * free_mask
+        floor = remove_small_objects(floor, min_size=400).astype(bool)
+        floor = binary_closing(floor, selem=selem)
+        traversible = np.logical_or(floor, traversible)
+        
+        # 计算边界（探索边缘）
+        explored_area = binary_closing(explored_area, selem=selem)
+        contours, _ = cv2.findContours(explored_area.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        image = np.zeros(full_map.shape[-2:], dtype=np.uint8)
+        image = cv2.drawContours(image, contours, -1, (255, 255, 255), thickness=3)
+        frontiers = np.logical_and(floor, image)
+        frontiers = remove_small_objects(frontiers.astype(bool), min_size=64)
+
+        return traversible, floor, frontiers.astype(np.uint8)
+    
     def look_around_and_map(self):
         """环视 360° 并建图"""
         print("\n[STEP 3] 环视 360° 建图...")
@@ -228,6 +289,8 @@ class MinimalMappingTest:
         # 保存最终地图
         final_map = maps_history[-1]['full_map'][0]  # (N+4, 480, 480)
         final_pose = maps_history[-1]['full_pose'][0]  # (3,)
+        final_floor = maps_history[-1]['floor']  # (480, 480)
+        final_traversible = maps_history[-1]['traversible']  # (480, 480)
         
         # 可视化不同通道
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -250,32 +313,23 @@ class MinimalMappingTest:
                        'r*', markersize=20)
         axes[0, 2].axis('off')
         
-        # 通道 3: 历史轨迹
-        axes[1, 0].imshow(final_map[3], cmap='Greens')
-        axes[1, 0].set_title('Channel 3: Past Locations')
+        # 处理后的地板 (关键！)
+        axes[1, 0].imshow(final_floor, cmap='YlGn')
+        axes[1, 0].set_title('Processed Floor (after morphology)')
         axes[1, 0].axis('off')
         
-        # 语义类别 (如果有)
-        if len(self.detected_classes) > 0:
-            # 找到 floor 类别
-            floor_idx = None
-            for i, cls in enumerate(self.detected_classes):
-                if 'floor' in cls.lower():
-                    floor_idx = i + 4  # 前4个是固定通道
-                    break
-            
-            if floor_idx is not None and floor_idx < final_map.shape[0]:
-                axes[1, 1].imshow(final_map[floor_idx], cmap='YlOrBr')
-                axes[1, 1].set_title(f'Channel {floor_idx}: Floor')
-                axes[1, 1].axis('off')
+        # 可穿越区域
+        axes[1, 1].imshow(final_traversible, cmap='Greens')
+        axes[1, 1].set_title('Traversible Area')
+        axes[1, 1].axis('off')
         
-        # 综合地图
+        # 综合地图 (障碍物 + 地板)
         composite = np.zeros((480, 480, 3))
         composite[:, :, 0] = final_map[0]  # 红色：障碍物
-        composite[:, :, 1] = final_map[1]  # 绿色：已探索
+        composite[:, :, 1] = final_floor  # 绿色：地板
         composite[:, :, 2] = final_map[2]  # 蓝色：当前位置
         axes[1, 2].imshow(composite)
-        axes[1, 2].set_title('Composite Map')
+        axes[1, 2].set_title('Composite Map (Obstacle+Floor+Pose)')
         axes[1, 2].axis('off')
         
         plt.tight_layout()
@@ -290,12 +344,14 @@ class MinimalMappingTest:
             ax.clear()
             composite = np.zeros((480, 480, 3))
             m = map_data['full_map'][0]
+            floor = map_data['floor']
+            
             composite[:, :, 0] = m[0]  # 障碍物
-            composite[:, :, 1] = m[1]  # 已探索
+            composite[:, :, 1] = floor  # 地板（处理后）
             composite[:, :, 2] = m[2]  # 当前位置
             
             ax.imshow(composite)
-            ax.set_title(f'Step {i+1}/12 - Rotation {(i+1)*30}°')
+            ax.set_title(f'Step {i+1}/12 - Rotation {(i+1)*30}° - Floor pixels: {np.sum(floor)}')
             ax.axis('off')
             
             plt.savefig(f"{self.output_dir}/maps/map_step_{i:02d}.png", dpi=100)
@@ -314,6 +370,8 @@ class MinimalMappingTest:
         print(f"地图尺寸: {final_map.shape}")
         print(f"已探索像素数: {np.sum(final_map[1] > 0)}")
         print(f"障碍物像素数: {np.sum(final_map[0] > 0)}")
+        print(f"地板像素数（处理后）: {np.sum(final_floor > 0)}")
+        print(f"可穿越像素数: {np.sum(final_traversible > 0)}")
         print("="*50)
     
     def run(self):
