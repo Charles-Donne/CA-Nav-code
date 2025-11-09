@@ -152,8 +152,7 @@ class GroundedSAM(Segment):
         except TypeError:
             # 旧版本：没有 labels 参数，手动绘制文本
             annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
-            # 手动添加标签（如果需要的话）
-            import cv2
+            # 手动添加标签（cv2 已在文件开头导入）
             for i, (xyxy, label) in enumerate(zip(detections.xyxy, labels)):
                 x1, y1, x2, y2 = map(int, xyxy)
                 cv2.putText(annotated_image, label, (x1, y1 - 10), 
