@@ -229,6 +229,180 @@ class MinimalMappingTest:
 
         return traversible, floor, frontiers.astype(np.uint8)
     
+    def _visualize_semantic_map(self, full_map, full_pose, lmb):
+        """生成彩色语义地图可视化（完全按照原程序 mapping.py._visualize 的逻辑）
+        
+        颜色映射：
+        - 0: 黑色（未探索）
+        - 1: 深灰（障碍物）
+        - 2: 浅灰（已探索但无语义）
+        - 3: 蓝色（智能体轨迹，这里用当前位置）
+        - 4+: 彩色（各类检测到的物体）
+        """
+        from vlnce_baselines.utils.constant import color_palette, legend_color_palette
+        
+        # 提取语义通道（4以后是物体类别）
+        # semantic_map: 每个像素的值是该像素最可能的类别 ID
+        semantic_map = full_map[4:].argmax(0)  # (480, 480)
+        obstacle_map = full_map[0]
+        explored_map = full_map[1]
+        
+        # 语义ID偏移：0保留给未探索，1保留给障碍物，2保留给已探索空区域，3保留给智能体
+        # 所以物体类别从5开始
+        semantic_map = semantic_map + 5
+        
+        # 获取特殊区域的 mask
+        not_cat_id = len(self.detected_classes) + 5  # 最后一个是"未分类"
+        not_cat_mask = (semantic_map == not_cat_id)
+        obstacle_mask = np.rint(obstacle_map) == 1
+        explored_mask = np.rint(explored_map) == 1
+        
+        # 未分类区域设为0（黑色）
+        semantic_map[not_cat_mask] = 0
+        
+        # 已探索但无物体的区域设为2（浅灰）
+        free_mask = np.logical_and(not_cat_mask, explored_mask)
+        semantic_map[free_mask] = 2
+        
+        # 障碍物设为1（深灰）
+        obstacle_mask = np.logical_and(not_cat_mask, obstacle_mask)
+        semantic_map[obstacle_mask] = 1
+        
+        # 当前位置设为3（蓝色）
+        pose_r = int(full_pose[1] * 100 / self.resolution)
+        pose_c = int(full_pose[0] * 100 / self.resolution)
+        # 画一个小圆圈
+        for dr in range(-3, 4):
+            for dc in range(-3, 4):
+                if dr*dr + dc*dc <= 9:  # 半径3的圆
+                    r, c = pose_r + dr, pose_c + dc
+                    if 0 <= r < semantic_map.shape[0] and 0 <= c < semantic_map.shape[1]:
+                        semantic_map[r, c] = 3
+        
+        # 生成调色板
+        color_pal = [int(x * 255.) for x in color_palette]
+        
+        # 创建调色板模式的图像
+        sem_map_vis = Image.new("P", (semantic_map.shape[1], semantic_map.shape[0]))
+        sem_map_vis.putpalette(color_pal)
+        sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
+        sem_map_vis = sem_map_vis.convert("RGB")
+        
+        # 翻转（使坐标系与Habitat一致）
+        sem_map_vis = np.flipud(sem_map_vis)
+        
+        # 保存语义地图
+        plt.imsave(f"{self.output_dir}/semantic_map.png", sem_map_vis)
+        print(f"[INFO] 保存彩色语义地图: {self.output_dir}/semantic_map.png")
+        
+        # 创建带图例的完整可视化
+        fig, ax = plt.subplots(figsize=(12, 10))
+        ax.imshow(sem_map_vis)
+        ax.set_title(f'Semantic Map - {len(self.detected_classes)} classes detected', fontsize=14)
+        ax.axis('off')
+        
+        # 添加图例
+        legend_text = "🎨 颜色图例:\n"
+        legend_text += "  • 黑色: 未探索\n"
+        legend_text += "  • 深灰: 障碍物\n"
+        legend_text += "  • 浅灰: 已探索空区域\n"
+        legend_text += "  • 蓝色: 智能体位置\n"
+        legend_text += "\n🏷️ 检测到的物体:\n"
+        for i, cls in enumerate(self.detected_classes):
+            legend_text += f"  {i+1}. {cls}\n"
+        
+        ax.text(1.02, 0.5, legend_text, transform=ax.transAxes,
+               fontsize=10, verticalalignment='center',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/semantic_map_with_legend.png", dpi=150, bbox_inches='tight')
+        print(f"[INFO] 保存语义地图（带图例）: {self.output_dir}/semantic_map_with_legend.png")
+        plt.close()
+    
+    def _save_all_map_types(self, maps_history):
+        """保存所有类型的地图（障碍物、探索区域、地板、可穿越、边界、语义）"""
+        print("\n[INFO] 保存所有地图类型...")
+        
+        final_map = maps_history[-1]['full_map'][0]
+        final_floor = maps_history[-1]['floor']
+        final_traversible = maps_history[-1]['traversible']
+        final_frontiers = maps_history[-1]['frontiers']
+        
+        # 创建子目录
+        os.makedirs(f"{self.output_dir}/map_types", exist_ok=True)
+        
+        # 1. 障碍物地图
+        plt.figure(figsize=(8, 8))
+        plt.imshow(final_map[0], cmap='Reds', vmin=0, vmax=1)
+        plt.title('Obstacle Map (Channel 0)')
+        plt.colorbar()
+        plt.axis('off')
+        plt.savefig(f"{self.output_dir}/map_types/obstacles.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 2. 探索区域地图
+        plt.figure(figsize=(8, 8))
+        plt.imshow(final_map[1], cmap='Blues', vmin=0, vmax=1)
+        plt.title('Explored Area Map (Channel 1)')
+        plt.colorbar()
+        plt.axis('off')
+        plt.savefig(f"{self.output_dir}/map_types/explored.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 3. 地板地图（后处理）
+        plt.figure(figsize=(8, 8))
+        plt.imshow(final_floor, cmap='Greens')
+        plt.title('Floor Map (Processed)')
+        plt.axis('off')
+        plt.savefig(f"{self.output_dir}/map_types/floor.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 4. 可穿越区域
+        plt.figure(figsize=(8, 8))
+        plt.imshow(final_traversible, cmap='YlGn')
+        plt.title('Traversible Area')
+        plt.axis('off')
+        plt.savefig(f"{self.output_dir}/map_types/traversible.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 5. 边界地图（探索边缘）
+        plt.figure(figsize=(8, 8))
+        plt.imshow(final_frontiers, cmap='Oranges')
+        plt.title('Frontiers (Exploration Boundaries)')
+        plt.axis('off')
+        plt.savefig(f"{self.output_dir}/map_types/frontiers.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 6. 各个物体类别的地图
+        for i, cls_name in enumerate(self.detected_classes):
+            channel_idx = 4 + i  # 语义通道从4开始
+            if channel_idx < final_map.shape[0]:
+                plt.figure(figsize=(8, 8))
+                plt.imshow(final_map[channel_idx], cmap='viridis')
+                plt.title(f'Semantic Channel: {cls_name}')
+                plt.colorbar()
+                plt.axis('off')
+                safe_name = cls_name.replace(' ', '_').replace('/', '_')
+                plt.savefig(f"{self.output_dir}/map_types/semantic_{i:02d}_{safe_name}.png", 
+                           dpi=150, bbox_inches='tight')
+                plt.close()
+        
+        print(f"[INFO] 所有地图类型已保存到: {self.output_dir}/map_types/")
+    
+    def _visualize_comprehensive_summary(self, maps_history):
+        """生成综合总结可视化"""
+        final_map = maps_history[-1]['full_map'][0]
+        final_pose = maps_history[-1]['full_pose'][0]
+        final_floor = maps_history[-1]['floor']
+        final_traversible = maps_history[-1]['traversible']
+        final_frontiers = maps_history[-1]['frontiers']
+        
+        if hasattr(self.mapping_module, 'lmb'):
+            lmb = self.mapping_module.lmb[0].astype(int)
+        else:
+            lmb = None
+    
     def look_around_and_map(self):
         """环视 360° 并建图 - 完全按照 ZS_Evaluator_mp._look_around() 的逻辑"""
         print("\n[STEP 3] 环视 360° 建图...")
@@ -356,9 +530,111 @@ class MinimalMappingTest:
         else:
             lmb = None
         
-        # 可视化不同通道
-        fig, axes = plt.subplots(3, 3, figsize=(18, 18))
-        # 可视化不同通道
+        # ========== 新增：生成彩色语义地图（与原程序一致）==========
+        self._visualize_semantic_map(final_map, final_pose, lmb)
+        
+        # ========== 保存所有地图类型 ==========
+        self._save_all_map_types(maps_history)
+        
+        # ========== 原有的综合可视化 ==========
+        self._visualize_comprehensive_summary(maps_history)
+        
+        # 保存动画 (地图演化过程)
+        self._save_evolution_animation(maps_history)
+        
+        # 打印统计信息
+        self._print_final_statistics(maps_history)
+    
+    def _save_evolution_animation(self, maps_history):
+        """保存地图演化动画"""
+        print("[INFO] 生成地图演化动画...")
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        for i, map_data in enumerate(maps_history):
+            ax.clear()
+            m = map_data['full_map'][0]
+            floor = map_data['floor']
+            map_h, map_w = m.shape[1], m.shape[2]
+            
+            composite = np.zeros((map_h, map_w, 3))
+            composite[:, :, 0] = m[0]  # 障碍物
+            composite[:, :, 1] = floor  # 地板（处理后）
+            composite[:, :, 2] = m[2]  # 当前位置
+            
+            ax.imshow(composite)
+            ax.set_title(f'Step {i+1}/12 - Rotation {(i+1)*30}° - Floor pixels: {np.sum(floor)}')
+            ax.axis('off')
+            
+            plt.savefig(f"{self.output_dir}/maps/map_step_{i:02d}.png", dpi=100)
+        
+        plt.close('all')
+        print(f"[INFO] 保存地图演化: {self.output_dir}/maps/map_step_*.png")
+    
+    def _print_final_statistics(self, maps_history):
+        """打印最终统计信息"""
+        final_map = maps_history[-1]['full_map'][0]
+        final_pose = maps_history[-1]['full_pose'][0]
+        final_floor = maps_history[-1]['floor']
+        final_traversible = maps_history[-1]['traversible']
+        
+        if hasattr(self.mapping_module, 'lmb'):
+            lmb = self.mapping_module.lmb[0].astype(int)
+        else:
+            lmb = None
+        
+        pose_c = int(final_pose[0] * 100 / self.resolution)
+        pose_r = int(final_pose[1] * 100 / self.resolution)
+        
+        print("\n" + "="*60)
+        print("📊 建图统计信息")
+        print("="*60)
+        print(f"Episode ID: {self.episode_id}")
+        print(f"检测到的类别数: {len(self.detected_classes)}")
+        print(f"类别列表: {list(self.detected_classes)}")
+        print()
+        print("🔍 原始地图数据范围:")
+        print(f"  • 障碍物通道 - Min: {final_map[0].min():.4f}, Max: {final_map[0].max():.4f}, Sum: {final_map[0].sum():.1f}")
+        print(f"  • 探索区域通道 - Min: {final_map[1].min():.4f}, Max: {final_map[1].max():.4f}, Sum: {final_map[1].sum():.1f}")
+        print(f"  • 当前位置通道 - Min: {final_map[2].min():.4f}, Max: {final_map[2].max():.4f}, Sum: {final_map[2].sum():.1f}")
+        print()
+        print("📍 坐标系统:")
+        print(f"  • 全局地图尺寸: {final_map.shape[1:]} pixels = ({final_map.shape[1]*self.resolution/100:.1f}m × {final_map.shape[2]*self.resolution/100:.1f}m)")
+        if lmb is not None:
+            local_w = lmb[1] - lmb[0]
+            local_h = lmb[3] - lmb[2]
+            print(f"  • 局部地图尺寸: ({local_w} × {local_h}) pixels = ({local_w*self.resolution/100:.1f}m × {local_h*self.resolution/100:.1f}m)")
+            print(f"  • 局部地图边界: x=[{lmb[0]}, {lmb[1]}], y=[{lmb[2]}, {lmb[3]}]")
+        print(f"  • 分辨率: {self.resolution} cm/pixel")
+        print()
+        print("📌 最终位姿 (全局坐标):")
+        print(f"  • x = {final_pose[0]:.2f} m (像素: {pose_c})")
+        print(f"  • y = {final_pose[1]:.2f} m (像素: {pose_r})")
+        print(f"  • θ = {final_pose[2]:.2f} rad ({np.degrees(final_pose[2]):.1f}°)")
+        print()
+        print("🗺️ 地图覆盖:")
+        total_pixels = final_map.shape[1] * final_map.shape[2]
+        print(f"  • 已探索像素数: {np.sum(final_map[1] > 0):,} ({np.sum(final_map[1] > 0) / total_pixels * 100:.1f}%)")
+        print(f"  • 障碍物像素数: {np.sum(final_map[0] > 0):,}")
+        print(f"  • 地板像素数（处理后）: {np.sum(final_floor > 0):,}")
+        print(f"  • 可穿越像素数: {np.sum(final_traversible > 0):,}")
+        print("="*60)
+    
+    def _visualize_comprehensive_summary(self, maps_history):
+        """生成综合总结可视化"""
+        final_map = maps_history[-1]['full_map'][0]
+        final_pose = maps_history[-1]['full_pose'][0]
+        final_floor = maps_history[-1]['floor']
+        final_traversible = maps_history[-1]['traversible']
+        
+        if hasattr(self.mapping_module, 'lmb'):
+            lmb = self.mapping_module.lmb[0].astype(int)
+        else:
+            lmb = None
+        
+        pose_r = int(final_pose[1] * 100 / self.resolution)
+        pose_c = int(final_pose[0] * 100 / self.resolution)
+        
+        # 创建综合可视化
         fig, axes = plt.subplots(3, 3, figsize=(18, 18))
         
         # ===== 第一行：原始通道 =====
@@ -458,65 +734,8 @@ class MinimalMappingTest:
         
         plt.tight_layout()
         plt.savefig(f"{self.output_dir}/final_map.png", dpi=150)
-        print(f"[INFO] 保存最终地图可视化: {self.output_dir}/final_map.png")
-        
-        # 保存动画 (地图演化过程)
-        print("[INFO] 生成地图演化动画...")
-        fig, ax = plt.subplots(figsize=(8, 8))
-        
-        for i, map_data in enumerate(maps_history):
-            ax.clear()
-            m = map_data['full_map'][0]
-            floor = map_data['floor']
-            map_h, map_w = m.shape[1], m.shape[2]
-            
-            composite = np.zeros((map_h, map_w, 3))
-            composite[:, :, 0] = m[0]  # 障碍物
-            composite[:, :, 1] = floor  # 地板（处理后）
-            composite[:, :, 2] = m[2]  # 当前位置
-            
-            ax.imshow(composite)
-            ax.set_title(f'Step {i+1}/12 - Rotation {(i+1)*30}° - Floor pixels: {np.sum(floor)}')
-            ax.axis('off')
-            
-            plt.savefig(f"{self.output_dir}/maps/map_step_{i:02d}.png", dpi=100)
-        
-        plt.close('all')
-        print(f"[INFO] 保存地图演化: {self.output_dir}/maps/map_step_*.png")
-        
-        print("\n" + "="*60)
-        print("📊 建图统计信息")
-        print("="*60)
-        print(f"Episode ID: {self.episode_id}")
-        print(f"检测到的类别数: {len(self.detected_classes)}")
-        print(f"类别列表: {list(self.detected_classes)}")
-        print()
-        print("🔍 原始地图数据范围:")
-        print(f"  • 障碍物通道 - Min: {final_map[0].min():.4f}, Max: {final_map[0].max():.4f}, Sum: {final_map[0].sum():.1f}")
-        print(f"  • 探索区域通道 - Min: {final_map[1].min():.4f}, Max: {final_map[1].max():.4f}, Sum: {final_map[1].sum():.1f}")
-        print(f"  • 当前位置通道 - Min: {final_map[2].min():.4f}, Max: {final_map[2].max():.4f}, Sum: {final_map[2].sum():.1f}")
-        print()
-        print("📍 坐标系统:")
-        print(f"  • 全局地图尺寸: {final_map.shape[1:]} pixels = ({final_map.shape[1]*self.resolution/100:.1f}m × {final_map.shape[2]*self.resolution/100:.1f}m)")
-        if lmb is not None:
-            local_w = lmb[1] - lmb[0]
-            local_h = lmb[3] - lmb[2]
-            print(f"  • 局部地图尺寸: ({local_w} × {local_h}) pixels = ({local_w*self.resolution/100:.1f}m × {local_h*self.resolution/100:.1f}m)")
-            print(f"  • 局部地图边界: x=[{lmb[0]}, {lmb[1]}], y=[{lmb[2]}, {lmb[3]}]")
-        print(f"  • 分辨率: {self.resolution} cm/pixel")
-        print()
-        print("📌 最终位姿 (全局坐标):")
-        print(f"  • x = {final_pose[0]:.2f} m (像素: {pose_c})")
-        print(f"  • y = {final_pose[1]:.2f} m (像素: {pose_r})")
-        print(f"  • θ = {final_pose[2]:.2f} rad ({np.degrees(final_pose[2]):.1f}°)")
-        print()
-        print("🗺️ 地图覆盖:")
-        total_pixels = final_map.shape[1] * final_map.shape[2]
-        print(f"  • 已探索像素数: {np.sum(final_map[1] > 0):,} ({np.sum(final_map[1] > 0) / total_pixels * 100:.1f}%)")
-        print(f"  • 障碍物像素数: {np.sum(final_map[0] > 0):,}")
-        print(f"  • 地板像素数（处理后）: {np.sum(final_floor > 0):,}")
-        print(f"  • 可穿越像素数: {np.sum(final_traversible > 0):,}")
-        print("="*60)
+        print(f"[INFO] 保存综合地图可视化: {self.output_dir}/final_map.png")
+        plt.close()
     
     def run(self):
         """运行完整测试"""
