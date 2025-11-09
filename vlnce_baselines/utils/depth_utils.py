@@ -173,7 +173,7 @@ def transform_camera_view_t(
         XYZ : ...x3
     """
     R = ru.get_r_matrix([1., 0., 0.], angle=np.deg2rad(camera_elevation_degree))
-    XYZ = torch.matmul(XYZ.reshape(-1, 3), torch.from_numpy(R).transpose(1, 0).to(device)).reshape(XYZ.shape)
+    XYZ = torch.matmul(XYZ.reshape(-1, 3), torch.from_numpy(R).float().transpose(1, 0).to(device)).reshape(XYZ.shape)
     XYZ[..., 2] = XYZ[..., 2] + sensor_height
     
     return XYZ
