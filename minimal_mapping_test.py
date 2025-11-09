@@ -204,7 +204,7 @@ class MinimalMappingTest:
         return traversible, floor, frontiers.astype(np.uint8)
     
     def look_around_and_map(self):
-        """环视 360° 并建图"""
+        """环视 360° 并建图 - 完全按照 ZS_Evaluator_mp._look_around() 的逻辑"""
         print("\n[STEP 3] 环视 360° 建图...")
         
         # 初始化地图
@@ -221,21 +221,21 @@ class MinimalMappingTest:
         accumulated_floor = np.zeros(self.map_shape)
         accumulated_traversible = np.zeros(self.map_shape)
         
+        # ========== 完全按照原始程序的流程 ==========
         for step in range(12):
             print(f"\n[STEP 3.{step+1}] 左转 30° (总计 {(step+1)*30}°)...")
             
-            # 执行左转动作
+            # ===== 1. 执行左转动作 =====
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
             outputs = self.envs.step(actions)
             obs, _, dones, infos = [list(x) for x in zip(*outputs)]
-            obs = obs[0]
             
             if dones[0]:
                 print("[WARNING] Episode 提前结束")
                 break
             
-            # 预处理观察
-            state, rgb, depth, annotated_rgb = self.preprocess_observation(obs)
+            # ===== 2. 预处理观察（使用原来的方法）=====
+            state, rgb, depth, annotated_rgb = self.preprocess_observation(obs[0])
             
             # 保存 RGB 和 Depth
             rgb_history.append(rgb)
@@ -246,34 +246,37 @@ class MinimalMappingTest:
             plt.imsave(f"{self.output_dir}/rgb/step_{step:02d}_annotated.png", annotated_rgb)
             plt.imsave(f"{self.output_dir}/depth/step_{step:02d}.png", depth[:,:,0], cmap='viridis')
             
-            # 准备 batch
+            # ===== 3. 批处理观察 =====
+            # 关键：padding 到最大通道数（模拟动态通道数）
             batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
             
-            # 获取位姿变化
-            sensor_pose = obs['sensor_pose']
-            poses = torch.tensor([sensor_pose]).float().to(self.device)
+            # ===== 4. 获取位姿变化 =====
+            poses = torch.from_numpy(np.array([obs[0]['sensor_pose']])).float().to(self.device)
             
-            # 更新地图
+            # ===== 5. 调用 mapping_module 前向传播（核心建图）=====
             self.mapping_module(batch_obs, poses)
+            
+            # ===== 6. 更新全局地图 =====
             full_map, full_pose, one_step_map = \
                 self.mapping_module.update_map(step, self.detected_classes, self.episode_id)
             
-            # ===== 关键补充：地图后处理 =====
-            # 注意：这里处理的是 full_map[0] (全局地图)，而不是 local_map
-            # 原因：
-            #   1. local_map 是从 full_map 中裁剪出来的视图
-            #   2. 每次更新后 local_map 已经写回到 full_map 了
-            #   3. 后处理需要全局视角来提取可导航区域（避免边界伪影）
-            #   4. 形态学操作（闭运算、轮廓检测）在全局地图上更准确
+            # ===== 7. 清空单步地图 =====
+            self.mapping_module.one_step_full_map.fill_(0.)
+            self.mapping_module.one_step_local_map.fill_(0.)
+            
+            # ===== 8. 处理导航地图 =====
             traversible, floor, frontiers = self._process_map(step, full_map[0])
             accumulated_floor = np.logical_or(accumulated_floor, floor)
             accumulated_traversible = traversible
             
+            # ===== 9. 打印调试信息 =====
+            print(f"[INFO] 位姿: [{full_pose[0,0]:.2f}, {full_pose[0,1]:.2f}, {full_pose[0,2]:.2f}]")
+            print(f"[INFO] 地图形状: {full_map.shape}")
             print(f"[INFO] 地板像素: {np.sum(floor)}, 可穿越像素: {np.sum(traversible)}")
-            print(f"[DEBUG] 障碍物通道最大值: {full_map[0,0].max():.4f}, 总和: {full_map[0,0].sum():.1f}")
-            print(f"[DEBUG] 探索区域通道最大值: {full_map[0,1].max():.4f}, 总和: {full_map[0,1].sum():.1f}")
+            print(f"[DEBUG] 障碍物通道 - Max: {full_map[0,0].max():.4f}, Sum: {full_map[0,0].sum():.1f}, NonZero: {np.count_nonzero(full_map[0,0])}")
+            print(f"[DEBUG] 探索区域通道 - Max: {full_map[0,1].max():.4f}, Sum: {full_map[0,1].sum():.1f}, NonZero: {np.count_nonzero(full_map[0,1])}")
             
-            # 保存地图（包含后处理结果）
+            # ===== 10. 保存地图（包含后处理结果）=====
             maps_history.append({
                 'full_map': full_map.copy(),
                 'full_pose': full_pose.copy(),
@@ -282,13 +285,6 @@ class MinimalMappingTest:
                 'traversible': traversible.copy(),
                 'frontiers': frontiers.copy(),
             })
-            
-            # 清空单步地图
-            self.mapping_module.one_step_full_map.fill_(0.)
-            self.mapping_module.one_step_local_map.fill_(0.)
-            
-            print(f"[INFO] 位姿: [{full_pose[0,0]:.2f}, {full_pose[0,1]:.2f}, {full_pose[0,2]:.2f}]")
-            print(f"[INFO] 地图形状: {full_map.shape}")
         
         return maps_history, rgb_history, depth_history
     
