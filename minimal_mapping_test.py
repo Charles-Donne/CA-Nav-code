@@ -270,6 +270,8 @@ class MinimalMappingTest:
             accumulated_traversible = traversible
             
             print(f"[INFO] 地板像素: {np.sum(floor)}, 可穿越像素: {np.sum(traversible)}")
+            print(f"[DEBUG] 障碍物通道最大值: {full_map[0,0].max():.4f}, 总和: {full_map[0,0].sum():.1f}")
+            print(f"[DEBUG] 探索区域通道最大值: {full_map[0,1].max():.4f}, 总和: {full_map[0,1].sum():.1f}")
             
             # 保存地图（包含后处理结果）
             maps_history.append({
@@ -319,18 +321,18 @@ class MinimalMappingTest:
         # ===== 第一行：原始通道 =====
         
         # 通道 0: 障碍物
-        axes[0, 0].imshow(final_map[0], cmap='gray')
-        axes[0, 0].set_title('Channel 0: Obstacles (Full Map)')
+        axes[0, 0].imshow(final_map[0], cmap='gray', vmin=0, vmax=1)
+        axes[0, 0].set_title(f'Channel 0: Obstacles (Full Map)\nMax: {final_map[0].max():.3f}')
         axes[0, 0].axis('off')
         
         # 通道 1: 已探索区域
-        axes[0, 1].imshow(final_map[1], cmap='Blues')
-        axes[0, 1].set_title('Channel 1: Explored Area (Full Map)')
+        axes[0, 1].imshow(final_map[1], cmap='Blues', vmin=0, vmax=1)
+        axes[0, 1].set_title(f'Channel 1: Explored Area (Full Map)\nMax: {final_map[1].max():.3f}, Sum: {final_map[1].sum():.0f}')
         axes[0, 1].axis('off')
         
         # 通道 2: 当前位置
-        axes[0, 2].imshow(final_map[2], cmap='Reds')
-        axes[0, 2].set_title('Channel 2: Current Location (Full Map)')
+        axes[0, 2].imshow(final_map[2], cmap='Reds', vmin=0, vmax=1)
+        axes[0, 2].set_title(f'Channel 2: Current Location (Full Map)\nMax: {final_map[2].max():.3f}')
         pose_r = int(final_pose[1] * 100 / self.resolution)  # y -> row
         pose_c = int(final_pose[0] * 100 / self.resolution)  # x -> col
         axes[0, 2].plot(pose_c, pose_r, 'r*', markersize=20)
@@ -436,13 +438,17 @@ class MinimalMappingTest:
         plt.close('all')
         print(f"[INFO] 保存地图演化: {self.output_dir}/maps/map_step_*.png")
         
-        # 打印统计信息
         print("\n" + "="*60)
         print("📊 建图统计信息")
         print("="*60)
         print(f"Episode ID: {self.episode_id}")
         print(f"检测到的类别数: {len(self.detected_classes)}")
         print(f"类别列表: {list(self.detected_classes)}")
+        print()
+        print("🔍 原始地图数据范围:")
+        print(f"  • 障碍物通道 - Min: {final_map[0].min():.4f}, Max: {final_map[0].max():.4f}, Sum: {final_map[0].sum():.1f}")
+        print(f"  • 探索区域通道 - Min: {final_map[1].min():.4f}, Max: {final_map[1].max():.4f}, Sum: {final_map[1].sum():.1f}")
+        print(f"  • 当前位置通道 - Min: {final_map[2].min():.4f}, Max: {final_map[2].max():.4f}, Sum: {final_map[2].sum():.1f}")
         print()
         print("📍 坐标系统:")
         print(f"  • 全局地图尺寸: {final_map.shape[1:]} pixels = ({final_map.shape[1]*self.resolution/100:.1f}m × {final_map.shape[2]*self.resolution/100:.1f}m)")
