@@ -134,8 +134,30 @@ class GroundedSAM(Segment):
         # print("process detections: ", t3 - t2)
         # print("sam: ", t4 - t3)
         # annotated_image.shape=(h,w,3)
-        annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
-        annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+        if mask_annotator is not None:
+            annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
+        else:
+            # 旧版本 supervision：手动绘制 mask
+            annotated_image = image.copy()
+            if detections.mask is not None:
+                for mask in detections.mask:
+                    color_mask = np.random.randint(0, 256, (1, 3), dtype=np.uint8)
+                    mask_bool = mask.astype(bool)
+                    annotated_image[mask_bool] = annotated_image[mask_bool] * 0.5 + color_mask * 0.5
+        
+        # 兼容不同版本的 BoxAnnotator.annotate() API
+        try:
+            # 新版本：labels 参数
+            annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+        except TypeError:
+            # 旧版本：没有 labels 参数，手动绘制文本
+            annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
+            # 手动添加标签（如果需要的话）
+            import cv2
+            for i, (xyxy, label) in enumerate(zip(detections.xyxy, labels)):
+                x1, y1, x2, y2 = map(int, xyxy)
+                cv2.putText(annotated_image, label, (x1, y1 - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         # detectins.mask.shape=[num_detected_classes, h, w]
         # attention: sometimes the model can't detect all classes, so num_detected_classes <= len(classes)
