@@ -55,15 +55,15 @@ TASK:
     SUCCESS_DISTANCE: 3.0
   NDTW:
     SUCCESS_DISTANCE: 3.0
-    GT_PATH: data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}_gt.json.gz
+    GT_PATH: /root/autodl-tmp/data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}_gt.json.gz
   SDTW:
     SUCCESS_DISTANCE: 3.0
-    GT_PATH: data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}_gt.json.gz
+    GT_PATH: /root/autodl-tmp/data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}_gt.json.gz
   ORACLE_SUCCESS:
     SUCCESS_DISTANCE: 3.0
 DATASET:
   TYPE: VLN-CE-v1
   SPLIT: val_unseen
-  DATA_PATH: data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}.json.gz
-  SCENES_DIR: data/scene_datasets/
-  LLM_REPLYS_PATH: data/datasets/LLM_REPLYS_VAL_UNSEEN/llm_reply_valunseen1839.json
+  DATA_PATH: /root/autodl-tmp/data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}.json.gz
+  SCENES_DIR: /root/autodl-tmp/data/scene_datasets
+  LLM_REPLYS_PATH: /root/autodl-tmp/data/datasets/LLM_REPLYS_VAL_UNSEEN/llm_reply_valunseen1839.json

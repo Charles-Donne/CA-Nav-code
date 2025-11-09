@@ -31,10 +31,10 @@ _C.KEYBOARD_CONTROL = 0
 # MAP CONFIG
 # -----------------------------------------------------------------------------
 _C.MAP = CN()
-_C.MAP.GROUNDING_DINO_CONFIG_PATH = "data/grounded_sam/GroundingDINO_SwinT_OGC.py"
-_C.MAP.GROUNDING_DINO_CHECKPOINT_PATH = "data/grounded_sam/groundingdino_swint_ogc.pth"
-_C.MAP.SAM_CHECKPOINT_PATH = "data/grounded_sam/sam_vit_h_4b8939.pth"
-_C.MAP.RepViTSAM_CHECKPOINT_PATH = "data/grounded_sam/repvit_sam.pt"
+_C.MAP.GROUNDING_DINO_CONFIG_PATH = "/root/autodl-tmp/data/grounded_sam/GroundingDINO_SwinT_OGC.py"
+_C.MAP.GROUNDING_DINO_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/groundingdino_swint_ogc.pth"
+_C.MAP.SAM_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/sam_vit_h_4b8939.pth"
+_C.MAP.RepViTSAM_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/repvit_sam.pt"
 _C.MAP.SAM_ENCODER_VERSION = "vit_h"
 _C.MAP.BOX_THRESHOLD = 0.25
 _C.MAP.TEXT_THRESHOLD = 0.25
