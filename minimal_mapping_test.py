@@ -88,9 +88,15 @@ class MinimalMappingTest:
         print("[INFO] GroundedSAM 初始化完成")
         
         # 语义地图模块
+        # 注意：mapping_module 内部维护两套地图：
+        #   • full_map (480×480): 全局地图，对应 24m×24m 物理空间
+        #   • local_map (240×240): 局部地图，以智能体为中心的 12m×12m 活动窗口
+        # 观察数据先投影到 local_map，再写回 full_map 对应区域
         self.mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
         self.mapping_module.eval()
         print("[INFO] Semantic_Mapping 初始化完成")
+        print(f"[INFO] 全局地图尺寸: {self.mapping_module.full_w} × {self.mapping_module.full_h}")
+        print(f"[INFO] 局部地图尺寸: {self.mapping_module.local_w} × {self.mapping_module.local_h}")
         
         # 检测类别
         self.detected_classes = OrderedSet()
@@ -166,18 +172,18 @@ class MinimalMappingTest:
         objects = np.sum(full_map[map_channels:, ...][not_navigable_index], axis=0).astype(bool) if len(not_navigable_index) > 0 else np.zeros_like(obstacles)
         
         # 形态学处理（闭运算，填充小孔）
-        selem = disk(kernel_size)
-        obstacles_closed = binary_closing(obstacles, selem=selem)
-        objects_closed = binary_closing(objects, selem=selem)
+        footprint = disk(kernel_size)  # 新版 scikit-image 使用 footprint 替代 selem
+        obstacles_closed = binary_closing(obstacles, footprint=footprint)
+        objects_closed = binary_closing(objects, footprint=footprint)
         navigable = np.logical_or.reduce(full_map[map_channels:, ...][navigable_index]) if len(navigable_index) > 0 else np.zeros_like(obstacles)
         navigable = np.logical_and(navigable, np.logical_not(objects))
-        navigable_closed = binary_closing(navigable, selem=selem)
+        navigable_closed = binary_closing(navigable, footprint=footprint)
         
         # 计算不可穿越区域
         untraversible = np.logical_or(objects_closed, obstacles_closed)
         untraversible[navigable_closed == 1] = 0
         untraversible = remove_small_objects(untraversible, min_size=64)
-        untraversible = binary_closing(untraversible, selem=disk(3))
+        untraversible = binary_closing(untraversible, footprint=disk(3))
         traversible = np.logical_not(untraversible)
 
         # 计算地板区域
@@ -185,11 +191,11 @@ class MinimalMappingTest:
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
         floor = remove_small_objects(floor, min_size=400).astype(bool)
-        floor = binary_closing(floor, selem=selem)
+        floor = binary_closing(floor, footprint=footprint)
         traversible = np.logical_or(floor, traversible)
         
         # 计算边界（探索边缘）
-        explored_area = binary_closing(explored_area, selem=selem)
+        explored_area = binary_closing(explored_area, footprint=footprint)
         contours, _ = cv2.findContours(explored_area.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         image = np.zeros(full_map.shape[-2:], dtype=np.uint8)
         image = cv2.drawContours(image, contours, -1, (255, 255, 255), thickness=3)
@@ -252,7 +258,12 @@ class MinimalMappingTest:
                 self.mapping_module.update_map(step, self.detected_classes, self.episode_id)
             
             # ===== 关键补充：地图后处理 =====
-            # 提取可穿越区域、地板、边界
+            # 注意：这里处理的是 full_map[0] (全局地图)，而不是 local_map
+            # 原因：
+            #   1. local_map 是从 full_map 中裁剪出来的视图
+            #   2. 每次更新后 local_map 已经写回到 full_map 了
+            #   3. 后处理需要全局视角来提取可导航区域（避免边界伪影）
+            #   4. 形态学操作（闭运算、轮廓检测）在全局地图上更准确
             traversible, floor, frontiers = self._process_map(step, full_map[0])
             accumulated_floor = np.logical_or(accumulated_floor, floor)
             accumulated_traversible = traversible
@@ -287,31 +298,46 @@ class MinimalMappingTest:
         print(f"[INFO] 保存地图历史: {self.output_dir}/maps_history.npy")
         
         # 保存最终地图
-        final_map = maps_history[-1]['full_map'][0]  # (N+4, 480, 480)
-        final_pose = maps_history[-1]['full_pose'][0]  # (3,)
-        final_floor = maps_history[-1]['floor']  # (480, 480)
-        final_traversible = maps_history[-1]['traversible']  # (480, 480)
+        final_map = maps_history[-1]['full_map'][0]  # (N+4, 480, 480) - 全局地图
+        final_pose = maps_history[-1]['full_pose'][0]  # (3,) - 全局坐标 [x, y, θ]
+        final_floor = maps_history[-1]['floor']  # (480, 480) - 处理后的地板
+        final_traversible = maps_history[-1]['traversible']  # (480, 480) - 可穿越区域
+        
+        # 获取局部地图信息（如果mapping_module有的话）
+        if hasattr(self.mapping_module, 'lmb'):
+            lmb = self.mapping_module.lmb[0].astype(int)  # [gx1, gx2, gy1, gy2]
+            print(f"[INFO] 局部地图边界: x=[{lmb[0]}, {lmb[1]}], y=[{lmb[2]}, {lmb[3]}]")
+        else:
+            lmb = None
         
         # 可视化不同通道
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig, axes = plt.subplots(3, 3, figsize=(18, 18))
+        # 可视化不同通道
+        fig, axes = plt.subplots(3, 3, figsize=(18, 18))
+        
+        # ===== 第一行：原始通道 =====
         
         # 通道 0: 障碍物
         axes[0, 0].imshow(final_map[0], cmap='gray')
-        axes[0, 0].set_title('Channel 0: Obstacles')
+        axes[0, 0].set_title('Channel 0: Obstacles (Full Map)')
         axes[0, 0].axis('off')
         
         # 通道 1: 已探索区域
         axes[0, 1].imshow(final_map[1], cmap='Blues')
-        axes[0, 1].set_title('Channel 1: Explored Area')
+        axes[0, 1].set_title('Channel 1: Explored Area (Full Map)')
         axes[0, 1].axis('off')
         
         # 通道 2: 当前位置
         axes[0, 2].imshow(final_map[2], cmap='Reds')
-        axes[0, 2].set_title('Channel 2: Current Location')
-        axes[0, 2].plot(final_pose[1]*100/self.resolution, 
-                       final_pose[0]*100/self.resolution, 
-                       'r*', markersize=20)
+        axes[0, 2].set_title('Channel 2: Current Location (Full Map)')
+        pose_r = int(final_pose[1] * 100 / self.resolution)  # y -> row
+        pose_c = int(final_pose[0] * 100 / self.resolution)  # x -> col
+        axes[0, 2].plot(pose_c, pose_r, 'r*', markersize=20)
+        axes[0, 2].text(pose_c, pose_r-20, f'({final_pose[0]:.1f}m, {final_pose[1]:.1f}m)', 
+                       color='red', fontsize=8, ha='center')
         axes[0, 2].axis('off')
+        
+        # ===== 第二行：后处理结果 =====
         
         # 处理后的地板 (关键！)
         axes[1, 0].imshow(final_floor, cmap='YlGn')
@@ -323,14 +349,64 @@ class MinimalMappingTest:
         axes[1, 1].set_title('Traversible Area')
         axes[1, 1].axis('off')
         
-        # 综合地图 (障碍物 + 地板)
+        # 边界区域
+        if 'frontiers' in maps_history[-1]:
+            axes[1, 2].imshow(maps_history[-1]['frontiers'], cmap='Oranges')
+            axes[1, 2].set_title('Frontiers (Exploration Boundary)')
+        else:
+            axes[1, 2].axis('off')
+        axes[1, 2].axis('off')
+        
+        # ===== 第三行：局部地图与综合视图 =====
+        
+        # 局部地图区域（如果有）
+        if lmb is not None:
+            local_region = np.zeros_like(final_map[0])
+            local_region[lmb[0]:lmb[1], lmb[2]:lmb[3]] = 1
+            axes[2, 0].imshow(local_region, cmap='Purples', alpha=0.3)
+            axes[2, 0].imshow(final_map[0], cmap='gray', alpha=0.7)
+            axes[2, 0].plot(pose_c, pose_r, 'r*', markersize=20)
+            # 画出局部地图边界
+            rect = plt.Rectangle((lmb[2], lmb[0]), lmb[3]-lmb[2], lmb[1]-lmb[0], 
+                                fill=False, edgecolor='red', linewidth=2)
+            axes[2, 0].add_patch(rect)
+            axes[2, 0].set_title('Local Map Region (240×240) in Full Map')
+            axes[2, 0].axis('off')
+        else:
+            axes[2, 0].axis('off')
+        
+        # 综合地图 (障碍物 + 地板 + 位置)
         composite = np.zeros((480, 480, 3))
         composite[:, :, 0] = final_map[0]  # 红色：障碍物
         composite[:, :, 1] = final_floor  # 绿色：地板
         composite[:, :, 2] = final_map[2]  # 蓝色：当前位置
-        axes[1, 2].imshow(composite)
-        axes[1, 2].set_title('Composite Map (Obstacle+Floor+Pose)')
-        axes[1, 2].axis('off')
+        axes[2, 1].imshow(composite)
+        axes[2, 1].plot(pose_c, pose_r, 'w*', markersize=20)
+        axes[2, 1].set_title('Composite Map (R:Obstacle, G:Floor, B:Pose)')
+        axes[2, 1].axis('off')
+        
+        # 显示坐标系统信息
+        info_text = f"""
+📍 坐标系统:
+• 全局地图: 480×480 (24m×24m)
+• 局部地图: 240×240 (12m×12m)
+• 分辨率: {self.resolution} cm/pixel
+
+📌 当前位姿 (全局坐标):
+• x = {final_pose[0]:.2f} m
+• y = {final_pose[1]:.2f} m
+• θ = {final_pose[2]:.2f} rad
+
+🗺️ 统计信息:
+• 探索: {np.sum(final_map[1] > 0)} pixels
+• 障碍: {np.sum(final_map[0] > 0)} pixels
+• 地板: {np.sum(final_floor > 0)} pixels
+• 可穿越: {np.sum(final_traversible > 0)} pixels
+        """
+        axes[2, 2].text(0.1, 0.5, info_text.strip(), 
+                       fontsize=10, family='monospace',
+                       verticalalignment='center')
+        axes[2, 2].axis('off')
         
         plt.tight_layout()
         plt.savefig(f"{self.output_dir}/final_map.png", dpi=150)
@@ -360,19 +436,33 @@ class MinimalMappingTest:
         print(f"[INFO] 保存地图演化: {self.output_dir}/maps/map_step_*.png")
         
         # 打印统计信息
-        print("\n" + "="*50)
-        print("建图统计信息")
-        print("="*50)
+        print("\n" + "="*60)
+        print("📊 建图统计信息")
+        print("="*60)
         print(f"Episode ID: {self.episode_id}")
         print(f"检测到的类别数: {len(self.detected_classes)}")
         print(f"类别列表: {list(self.detected_classes)}")
-        print(f"最终位姿: [{final_pose[0]:.2f}, {final_pose[1]:.2f}, {final_pose[2]:.2f}]")
-        print(f"地图尺寸: {final_map.shape}")
-        print(f"已探索像素数: {np.sum(final_map[1] > 0)}")
-        print(f"障碍物像素数: {np.sum(final_map[0] > 0)}")
-        print(f"地板像素数（处理后）: {np.sum(final_floor > 0)}")
-        print(f"可穿越像素数: {np.sum(final_traversible > 0)}")
-        print("="*50)
+        print()
+        print("📍 坐标系统:")
+        print(f"  • 全局地图尺寸: {final_map.shape[1:]} pixels = ({final_map.shape[1]*self.resolution/100:.1f}m × {final_map.shape[2]*self.resolution/100:.1f}m)")
+        if lmb is not None:
+            local_w = lmb[1] - lmb[0]
+            local_h = lmb[3] - lmb[2]
+            print(f"  • 局部地图尺寸: ({local_w} × {local_h}) pixels = ({local_w*self.resolution/100:.1f}m × {local_h*self.resolution/100:.1f}m)")
+            print(f"  • 局部地图边界: x=[{lmb[0]}, {lmb[1]}], y=[{lmb[2]}, {lmb[3]}]")
+        print(f"  • 分辨率: {self.resolution} cm/pixel")
+        print()
+        print("📌 最终位姿 (全局坐标):")
+        print(f"  • x = {final_pose[0]:.2f} m (像素: {pose_c})")
+        print(f"  • y = {final_pose[1]:.2f} m (像素: {pose_r})")
+        print(f"  • θ = {final_pose[2]:.2f} rad ({np.degrees(final_pose[2]):.1f}°)")
+        print()
+        print("🗺️ 地图覆盖:")
+        print(f"  • 已探索像素数: {np.sum(final_map[1] > 0):,} ({np.sum(final_map[1] > 0) / (480*480) * 100:.1f}%)")
+        print(f"  • 障碍物像素数: {np.sum(final_map[0] > 0):,}")
+        print(f"  • 地板像素数（处理后）: {np.sum(final_floor > 0):,}")
+        print(f"  • 可穿越像素数: {np.sum(final_traversible > 0):,}")
+        print("="*60)
     
     def run(self):
         """运行完整测试"""
