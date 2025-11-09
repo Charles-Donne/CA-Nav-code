@@ -191,7 +191,7 @@ def transform_pose_t(XYZ, current_pose, device):
         XYZ : ...x3
     """
     R = ru.get_r_matrix([0., 0., 1.], angle=current_pose[2] - np.pi / 2.)
-    XYZ = torch.matmul(XYZ.reshape(-1, 3), torch.from_numpy(R).transpose(1, 0).to(device)).reshape(XYZ.shape)
+    XYZ = torch.matmul(XYZ.reshape(-1, 3), torch.from_numpy(R).float().transpose(1, 0).to(device)).reshape(XYZ.shape)
     XYZ[..., 0] += current_pose[0]
     XYZ[..., 1] += current_pose[1]
     
