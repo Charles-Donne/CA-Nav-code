@@ -102,10 +102,36 @@ class MinimalMappingTest:
         self.classes = base_classes.copy()  # ["floor", "wall", "door", ...]
         
     def preprocess_observation(self, obs):
-        """预处理观察：语义分割"""
+        """预处理观察：语义分割 + 深度预处理"""
         # 提取 RGB 和 Depth
         rgb = obs['rgb'].astype(np.uint8)
         depth = obs['depth']
+        
+        # ============ 深度预处理（与 ZS_Evaluator_mp 一致）============
+        # 1. 移除通道维度
+        depth = depth[:, :, 0] * 1
+        
+        # 2. 填充缺失深度值（用该列的最大值填充）
+        for i in range(depth.shape[1]):
+            depth[:, i][depth[:, i] == 0.] = depth[:, i].max()
+        
+        # 3. 将过远的像素设为无效
+        mask2 = depth > 0.99
+        depth[mask2] = 0.
+        
+        # 4. 将无效像素设为视野范围（100米）
+        mask1 = depth == 0
+        depth[mask1] = 100.0
+        
+        # 5. 归一化到厘米单位（关键步骤！）
+        min_depth = 0.5  # 从 zs_vlnce_task.yaml: DEPTH_SENSOR.MIN_DEPTH
+        max_depth = 5.0  # 从 zs_vlnce_task.yaml: DEPTH_SENSOR.MAX_DEPTH
+        depth = min_depth * 100.0 + depth * max_depth * 100.0
+        # 转换: [0, 1] → [50cm, 550cm]
+        
+        # 6. 恢复通道维度
+        depth = depth[:, :, np.newaxis]
+        # ============================================================
         
         # 语义分割
         masks, labels, annotated_image, detections = \
@@ -243,15 +269,16 @@ class MinimalMappingTest:
             
             # ===== 打印深度信息 =====
             depth_values = depth[:,:,0]
-            print(f"[DEBUG] 深度图统计:")
+            print(f"[DEBUG] 深度图统计（预处理后）:")
             print(f"  • 形状: {depth_values.shape}")
-            print(f"  • Min: {depth_values.min():.4f}m, Max: {depth_values.max():.4f}m")
-            print(f"  • Mean: {depth_values.mean():.4f}m, Median: {np.median(depth_values):.4f}m")
-            print(f"  • 有效像素（> 0）: {np.count_nonzero(depth_values)} / {depth_values.size}")
-            print(f"  • 直方图: 0-1m: {np.sum((depth_values > 0) & (depth_values < 1))}, "
-                  f"1-3m: {np.sum((depth_values >= 1) & (depth_values < 3))}, "
-                  f"3-5m: {np.sum((depth_values >= 3) & (depth_values < 5))}, "
-                  f">5m: {np.sum(depth_values >= 5)}")
+            print(f"  • Min: {depth_values.min():.2f}cm, Max: {depth_values.max():.2f}cm")
+            print(f"  • Mean: {depth_values.mean():.2f}cm, Median: {np.median(depth_values):.2f}cm")
+            print(f"  • 有效像素（< 1000cm）: {np.count_nonzero(depth_values < 1000)} / {depth_values.size}")
+            print(f"  • 直方图: 50-100cm: {np.sum((depth_values >= 50) & (depth_values < 100))}, "
+                  f"100-200cm: {np.sum((depth_values >= 100) & (depth_values < 200))}, "
+                  f"200-400cm: {np.sum((depth_values >= 200) & (depth_values < 400))}, "
+                  f"400-550cm: {np.sum((depth_values >= 400) & (depth_values < 550))}, "
+                  f">1000cm(invalid): {np.sum(depth_values >= 1000)}")
             
             # 保存可视化
             plt.imsave(f"{self.output_dir}/rgb/step_{step:02d}.png", rgb)
