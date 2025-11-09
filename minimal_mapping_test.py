@@ -241,6 +241,18 @@ class MinimalMappingTest:
             rgb_history.append(rgb)
             depth_history.append(depth)
             
+            # ===== 打印深度信息 =====
+            depth_values = depth[:,:,0]
+            print(f"[DEBUG] 深度图统计:")
+            print(f"  • 形状: {depth_values.shape}")
+            print(f"  • Min: {depth_values.min():.4f}m, Max: {depth_values.max():.4f}m")
+            print(f"  • Mean: {depth_values.mean():.4f}m, Median: {np.median(depth_values):.4f}m")
+            print(f"  • 有效像素（> 0）: {np.count_nonzero(depth_values)} / {depth_values.size}")
+            print(f"  • 直方图: 0-1m: {np.sum((depth_values > 0) & (depth_values < 1))}, "
+                  f"1-3m: {np.sum((depth_values >= 1) & (depth_values < 3))}, "
+                  f"3-5m: {np.sum((depth_values >= 3) & (depth_values < 5))}, "
+                  f">5m: {np.sum(depth_values >= 5)}")
+            
             # 保存可视化
             plt.imsave(f"{self.output_dir}/rgb/step_{step:02d}.png", rgb)
             plt.imsave(f"{self.output_dir}/rgb/step_{step:02d}_annotated.png", annotated_rgb)
@@ -249,6 +261,14 @@ class MinimalMappingTest:
             # ===== 3. 批处理观察 =====
             # 关键：padding 到最大通道数（模拟动态通道数）
             batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
+            
+            # ===== 打印输入统计 =====
+            print(f"[DEBUG] 输入 batch_obs:")
+            print(f"  • 形状: {batch_obs.shape}")
+            print(f"  • RGB通道 (0-2) - Min: {batch_obs[0,0:3].min():.2f}, Max: {batch_obs[0,0:3].max():.2f}")
+            print(f"  • Depth通道 (3) - Min: {batch_obs[0,3].min():.2f}, Max: {batch_obs[0,3].max():.2f}, NonZero: {torch.count_nonzero(batch_obs[0,3])}")
+            if batch_obs.shape[1] > 4:
+                print(f"  • Semantic通道 (4+) - 通道数: {batch_obs.shape[1] - 4}, NonZero总计: {torch.count_nonzero(batch_obs[0,4:])}")
             
             # ===== 4. 获取位姿变化 =====
             poses = torch.from_numpy(np.array([obs[0]['sensor_pose']])).float().to(self.device)
@@ -375,7 +395,8 @@ class MinimalMappingTest:
             axes[2, 0].axis('off')
         
         # 综合地图 (障碍物 + 地板 + 位置)
-        composite = np.zeros((480, 480, 3))
+        map_h, map_w = final_map.shape[1], final_map.shape[2]
+        composite = np.zeros((map_h, map_w, 3))
         composite[:, :, 0] = final_map[0]  # 红色：障碍物
         composite[:, :, 1] = final_floor  # 绿色：地板
         composite[:, :, 2] = final_map[2]  # 蓝色：当前位置
@@ -385,10 +406,11 @@ class MinimalMappingTest:
         axes[2, 1].axis('off')
         
         # 显示坐标系统信息
+        map_size_cm = self.config.MAP.MAP_SIZE_CM
         info_text = f"""
 📍 坐标系统:
-• 全局地图: 480×480 (24m×24m)
-• 局部地图: 240×240 (12m×12m)
+• 全局地图: {final_map.shape[1]}×{final_map.shape[2]} ({map_size_cm/100:.1f}m×{map_size_cm/100:.1f}m)
+• 局部地图: {lmb[1]-lmb[0] if lmb is not None else 'N/A'}×{lmb[3]-lmb[2] if lmb is not None else 'N/A'} pixels
 • 分辨率: {self.resolution} cm/pixel
 
 📌 当前位姿 (全局坐标):
@@ -417,10 +439,11 @@ class MinimalMappingTest:
         
         for i, map_data in enumerate(maps_history):
             ax.clear()
-            composite = np.zeros((480, 480, 3))
             m = map_data['full_map'][0]
             floor = map_data['floor']
+            map_h, map_w = m.shape[1], m.shape[2]
             
+            composite = np.zeros((map_h, map_w, 3))
             composite[:, :, 0] = m[0]  # 障碍物
             composite[:, :, 1] = floor  # 地板（处理后）
             composite[:, :, 2] = m[2]  # 当前位置
@@ -461,7 +484,8 @@ class MinimalMappingTest:
         print(f"  • θ = {final_pose[2]:.2f} rad ({np.degrees(final_pose[2]):.1f}°)")
         print()
         print("🗺️ 地图覆盖:")
-        print(f"  • 已探索像素数: {np.sum(final_map[1] > 0):,} ({np.sum(final_map[1] > 0) / (480*480) * 100:.1f}%)")
+        total_pixels = final_map.shape[1] * final_map.shape[2]
+        print(f"  • 已探索像素数: {np.sum(final_map[1] > 0):,} ({np.sum(final_map[1] > 0) / total_pixels * 100:.1f}%)")
         print(f"  • 障碍物像素数: {np.sum(final_map[0] > 0):,}")
         print(f"  • 地板像素数（处理后）: {np.sum(final_floor > 0):,}")
         print(f"  • 可穿越像素数: {np.sum(final_traversible > 0):,}")
