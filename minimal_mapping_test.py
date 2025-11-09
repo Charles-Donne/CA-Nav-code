@@ -95,8 +95,7 @@ class MinimalMappingTest:
         self.mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
         self.mapping_module.eval()
         print("[INFO] Semantic_Mapping 初始化完成")
-        print(f"[INFO] 全局地图尺寸: {self.mapping_module.full_w} × {self.mapping_module.full_h}")
-        print(f"[INFO] 局部地图尺寸: {self.mapping_module.local_w} × {self.mapping_module.local_h}")
+        # 注意：full_w, full_h 等属性要在 init_map_and_pose() 调用后才会初始化
         
         # 检测类别
         self.detected_classes = OrderedSet()
@@ -211,6 +210,8 @@ class MinimalMappingTest:
         # 初始化地图
         self.mapping_module.init_map_and_pose(num_detected_classes=len(self.detected_classes))
         print(f"[INFO] 地图初始化完成，检测类别数: {len(self.detected_classes)}")
+        print(f"[INFO] 全局地图尺寸: {self.mapping_module.full_w} × {self.mapping_module.full_h} pixels")
+        print(f"[INFO] 局部地图尺寸: {self.mapping_module.local_w} × {self.mapping_module.local_h} pixels")
         
         maps_history = []
         rgb_history = []
