@@ -149,6 +149,10 @@ class MinimalMappingTest:
         rgb_history = []
         depth_history = []
         
+        # 累积的地板和可穿越区域
+        accumulated_floor = np.zeros(self.map_shape)
+        accumulated_traversible = np.zeros(self.map_shape)
+        
         for step in range(12):
             print(f"\n[STEP 3.{step+1}] 左转 30° (总计 {(step+1)*30}°)...")
             
@@ -175,10 +179,10 @@ class MinimalMappingTest:
             plt.imsave(f"{self.output_dir}/depth/step_{step:02d}.png", depth[:,:,0], cmap='viridis')
             
             # 准备 batch
-            batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)  # (1, 4+N, 120, 160)
+            batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
             
             # 获取位姿变化
-            sensor_pose = obs['sensor_pose']  # [Δx, Δy, Δθ]
+            sensor_pose = obs['sensor_pose']
             poses = torch.tensor([sensor_pose]).float().to(self.device)
             
             # 更新地图
@@ -186,11 +190,22 @@ class MinimalMappingTest:
             full_map, full_pose, one_step_map = \
                 self.mapping_module.update_map(step, self.detected_classes, self.episode_id)
             
-            # 保存地图
+            # ===== 关键补充：地图后处理 =====
+            # 提取可穿越区域、地板、边界
+            traversible, floor, frontiers = self._process_map(step, full_map[0])
+            accumulated_floor = np.logical_or(accumulated_floor, floor)
+            accumulated_traversible = traversible
+            
+            print(f"[INFO] 地板像素: {np.sum(floor)}, 可穿越像素: {np.sum(traversible)}")
+            
+            # 保存地图（包含后处理结果）
             maps_history.append({
                 'full_map': full_map.copy(),
                 'full_pose': full_pose.copy(),
-                'one_step_map': one_step_map.copy()
+                'one_step_map': one_step_map.copy(),
+                'floor': floor.copy(),
+                'traversible': traversible.copy(),
+                'frontiers': frontiers.copy(),
             })
             
             # 清空单步地图
