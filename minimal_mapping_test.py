@@ -461,7 +461,7 @@ class MinimalMappingTest:
             self.initialize_modules()
             
             # 3. 环视建图
-            maps_history, rgb_history, depth_history = self.look_around_and_map()
+            maps_history = self.look_around_and_map()
             
             # 4. 保存结果
             self.save_maps(maps_history)
