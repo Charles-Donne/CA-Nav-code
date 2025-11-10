@@ -115,7 +115,8 @@ _C.TASK.TOP_DOWN_MAP_VLNCE.FOG_OF_WAR.VISIBILITY_DIST = 5.0
 # ----------------------------------------------------------------------------
 # DATASET EXTENSIONS
 # ----------------------------------------------------------------------------
-_C.DATASET.EPISODES_ALLOWED = [701]
+# _C.DATASET.EPISODES_ALLOWED = [701]  # 注释掉，改为加载所有 episodes
+_C.DATASET.EPISODES_ALLOWED = None  # None 表示加载所有 episodes
 # _C.DATASET.EPISODES_ALLOWED = [389]
 
 

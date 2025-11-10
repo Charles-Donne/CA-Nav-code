@@ -65,12 +65,10 @@ class MinimalMappingTest:
         print(f"[INFO] 地图分辨率: {self.resolution} cm/pixel")
         
     def initialize_environment(self):
-        """初始化环境（使用 episode_index 直接选择）"""
+        """初始化环境（通过 EPISODES_ALLOWED 配置已经过滤）"""
         print("\n[STEP 1] 初始化 Habitat 环境...")
         
-
-        
-        # 加载数据集（直接使用原始配置，像 llm_vlm_control.py 一样）
+        # 加载数据集（已通过 config.TASK_CONFIG.DATASET.EPISODES_ALLOWED 过滤）
         print("Loading dataset...")
         dataset = make_dataset(
             id_dataset=self.config.TASK_CONFIG.DATASET.TYPE,
@@ -82,37 +80,9 @@ class MinimalMappingTest:
         if len(dataset.episodes) > 0:
             print(f"[DEBUG] 数据集类型: {self.config.TASK_CONFIG.DATASET.TYPE}")
             print(f"[DEBUG] Split: {self.config.TASK_CONFIG.DATASET.SPLIT}")
-            print(f"[DEBUG] 数据路径: {self.config.TASK_CONFIG.DATASET.DATA_PATH}")
-            
-            # 检查场景分布
-            unique_scenes = set()
-            for ep in dataset.episodes[:min(100, len(dataset.episodes))]:
-                scene = ep.scene_id.split('/')[-1].split('.')[0]
-                unique_scenes.add(scene)
-            print(f"[DEBUG] 前{min(100, len(dataset.episodes))}个episodes包含 {len(unique_scenes)} 个不同场景")
-            
-            if len(dataset.episodes) <= 10:
-                print(f"[DEBUG] 所有场景: {sorted(unique_scenes)}")
+            print(f"[DEBUG] Episode ID: {dataset.episodes[0].episode_id}")
         
-        # 选择 episode
-        if self.episode_index is not None:
-            if self.episode_index < 0 or self.episode_index >= len(dataset.episodes):
-                print(f"✗ 无效的 episode index: {self.episode_index} (可用范围: 0-{len(dataset.episodes)-1})")
-                print(f"[WARNING] 使用默认 episode 0")
-                self.episode_index = 0
-            
-            # 只保留选定的 episode
-            selected_episode = dataset.episodes[self.episode_index]
-            dataset.episodes = [selected_episode]
-            
-            print(f"✓ 已选择 Episode {self.episode_index}: ID={selected_episode.episode_id}")
-        else:
-            print(f"[INFO] 未指定 episode_index，使用第一个 episode")
-            self.episode_index = 0
-            selected_episode = dataset.episodes[0]
-            dataset.episodes = [selected_episode]
-        
-        # 初始化环境（使用筛选后的 dataset）
+        # 初始化环境
         try:
             self.env = Env(self.config.TASK_CONFIG, dataset)
             print(f"✓ 环境初始化完成")
@@ -143,7 +113,6 @@ class MinimalMappingTest:
         else:
             self.instruction_text = "No instruction available"
         
-        print(f"[INFO] Episode Index: {self.episode_index}")
         print(f"[INFO] Episode ID: {self.episode_id}")
         print(f"[INFO] 场景: {self.scene_id}")
         print(f"[INFO] Instruction: {self.instruction_text[:100]}..." if len(self.instruction_text) > 100 else f"[INFO] Instruction: {self.instruction_text}")
@@ -593,10 +562,10 @@ def main():
         help="配置文件路径"
     )
     parser.add_argument(
-        "--episode-index",
+        "--episode-id",
         type=int,
-        default=0,
-        help="指定 Episode 索引 (例如: 0, 1, 2...)"
+        default=None,
+        help="指定 Episode ID (例如: 701, 389, 等)"
     )
     parser.add_argument(
         "opts",
@@ -617,14 +586,18 @@ def main():
     config.MAP.VISUALIZE = False
     config.MAP.PRINT_IMAGES = False
     
-    # 显示 episode 索引
-    if args.episode_index is not None:
-        print(f"\n[INFO] Episode Index: {args.episode_index}")
+    # 如果指定了 episode_id，覆盖 EPISODES_ALLOWED
+    if args.episode_id is not None:
+        print(f"\n[INFO] 指定 Episode ID: {args.episode_id}")
+        config.TASK_CONFIG.DATASET.EPISODES_ALLOWED = [args.episode_id]
+    else:
+        # 使用默认配置（default.py 中已设置为 None，加载所有 episodes）
+        print(f"\n[INFO] 使用配置中的 EPISODES_ALLOWED: {config.TASK_CONFIG.DATASET.EPISODES_ALLOWED}")
     
     config.freeze()
     
-    # 运行测试（传递 episode_index）
-    tester = MinimalMappingTest(config, episode_index=args.episode_index)
+    # 运行测试（不再需要传递 episode_index）
+    tester = MinimalMappingTest(config, episode_index=None)
     tester.run()
 
 

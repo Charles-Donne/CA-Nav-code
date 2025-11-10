@@ -33,6 +33,7 @@ TASK:
   SENSORS: [
     INSTRUCTION_SENSOR,
     SENSOR_POSE_SENSOR,
+    LLM_SENSOR,
     POSITION_SENSOR,
     HEADING_SENSOR
   ]
@@ -65,4 +66,4 @@ DATASET:
   SPLIT: val_unseen
   DATA_PATH: /root/autodl-tmp/data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}.json.gz
   SCENES_DIR: /root/autodl-tmp/data/scene_datasets
-  CONTENT_SCENES: ["*"]
+  LLM_REPLYS_PATH: /root/autodl-tmp/data/datasets/LLM_REPLYS_VAL_UNSEEN/llm_reply_valunseen1839.json
