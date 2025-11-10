@@ -66,6 +66,13 @@ class ValueMap(nn.Module):
         for module in self.model.modules():
             if isinstance(module, nn.GELU) and not hasattr(module, 'approximate'):
                 module.approximate = 'none'
+        
+        # 修复新版 transformers (>4.27) 的 BertTokenizer 兼容性
+        if hasattr(self.model, 'tokenizer'):
+            tokenizer = self.model.tokenizer
+            if not hasattr(tokenizer, 'unique_no_split_tokens'):
+                # unique_no_split_tokens 在新版中被移除，用 all_special_tokens 替代
+                tokenizer.unique_no_split_tokens = list(set(tokenizer.all_special_tokens))
     
     def _calculate_confidence(self, theta: np.ndarray) -> np.float64:
         return (np.cos(0.5 * np.pi * theta / (self.hfov / 2)))**2
