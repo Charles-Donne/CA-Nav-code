@@ -38,7 +38,7 @@ from skimage.morphology import remove_small_objects, binary_closing, disk
 class MinimalMappingTest:
     """最小化建图测试"""
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, episode_index: int = None):
         self.config = config
         self.device = get_device(config.TORCH_GPU_ID)
         torch.cuda.set_device(self.device)
@@ -55,75 +55,84 @@ class MinimalMappingTest:
         os.makedirs(f"{self.output_dir}/rgb", exist_ok=True)
         os.makedirs(f"{self.output_dir}/depth", exist_ok=True)
         
-        # 目标instruction ID（可选）
-        self.target_instruction_id = None
+        # Episode 索引（替代 instruction_id）
+        self.episode_index = episode_index
+        self.env = None  # 单个环境（不是 VectorEnv）
         
         print(f"[INFO] 输出目录: {self.output_dir}")
         print(f"[INFO] 地图尺寸: {self.map_shape}")
         print(f"[INFO] 地图分辨率: {self.resolution} cm/pixel")
         
     def initialize_environment(self):
-        """初始化环境"""
+        """初始化环境（使用 episode_index 直接选择）"""
         print("\n[STEP 1] 初始化 Habitat 环境...")
         
-        # 构建环境
-        self.envs = construct_envs(
-            self.config, 
-            get_env_class(self.config.ENV_NAME),
-            auto_reset_done=False
+        # 导入 make_dataset
+        from habitat import make_dataset, Env
+        
+        # 加载数据集
+        print("加载数据集...")
+        dataset = make_dataset(
+            id_dataset=self.config.TASK_CONFIG.DATASET.TYPE,
+            config=self.config.TASK_CONFIG.DATASET
         )
+        print(f"✓ 数据集加载完成 ({len(dataset.episodes)} episodes)")
         
-        # 重置环境
-        obs = self.envs.reset()
-        current_episode = self.envs.current_episodes()[0]
-        
-        # 如果指定了instruction_id，尝试切换到对应的episode
-        if self.target_instruction_id is not None:
-            print(f"[INFO] 正在寻找 Instruction ID: {self.target_instruction_id}...")
-            max_attempts = 2000  # 增加尝试次数，因为数据集可能很大
-            found = False
+        # 选择 episode
+        if self.episode_index is not None:
+            if self.episode_index < 0 or self.episode_index >= len(dataset.episodes):
+                print(f"✗ 无效的 episode index: {self.episode_index} (可用范围: 0-{len(dataset.episodes)-1})")
+                print(f"[WARNING] 使用默认 episode 0")
+                self.episode_index = 0
             
-            for attempt in range(max_attempts):
-                # 检查当前episode的instruction_id
-                if hasattr(current_episode, 'instruction') and hasattr(current_episode.instruction, 'instruction_id'):
-                    current_id = current_episode.instruction.instruction_id
-                elif hasattr(current_episode, 'instruction_id'):
-                    current_id = current_episode.instruction_id
-                else:
-                    # 尝试从episode_id提取（有些数据集用episode_id作为instruction_id）
-                    current_id = current_episode.episode_id
-                
-                if str(current_id) == str(self.target_instruction_id):
-                    print(f"[INFO] 找到匹配的Instruction！(尝试 {attempt+1}/{max_attempts})")
-                    found = True
-                    break
-                
-                # 重新reset尝试下一个episode
-                obs = self.envs.reset()
-                current_episode = self.envs.current_episodes()[0]
+            # 只保留选定的 episode
+            selected_episode = dataset.episodes[self.episode_index]
+            dataset.episodes = [selected_episode]
             
-            if not found:
-                print(f"[WARNING] 未找到Instruction ID {self.target_instruction_id}，使用当前Episode")
+            print(f"✓ 已选择 Episode {self.episode_index}: ID={selected_episode.episode_id}")
+        else:
+            print(f"[INFO] 未指定 episode_index，使用第一个 episode")
+            self.episode_index = 0
+            selected_episode = dataset.episodes[0]
+            dataset.episodes = [selected_episode]
         
-        self.episode_id = current_episode.episode_id
-        self.scene_id = current_episode.scene_id.split('/')[-1].split('.')[0]  # 提取场景名称
+        # 初始化环境（使用筛选后的 dataset）
+        try:
+            self.env = Env(self.config.TASK_CONFIG, dataset)
+            print(f"✓ 环境初始化完成")
+        except Exception as e:
+            print(f"✗ 环境初始化失败: {e}")
+            raise
         
-        # 尝试获取instruction信息
-        if hasattr(current_episode, 'instruction'):
-            if hasattr(current_episode.instruction, 'instruction_text'):
-                self.instruction_text = current_episode.instruction.instruction_text
-            elif hasattr(current_episode.instruction, 'text'):
-                self.instruction_text = current_episode.instruction.text
+        # 重置环境获取初始观察
+        obs = self.env.reset()
+        
+        # 获取 episode 信息
+        self.episode_id = self.env.current_episode.episode_id
+        self.scene_id = self.env.current_episode.scene_id.split('/')[-1].split('.')[0]
+        
+        # 获取 instruction
+        if hasattr(obs, 'get') and 'instruction' in obs:
+            if isinstance(obs['instruction'], dict) and 'text' in obs['instruction']:
+                self.instruction_text = obs['instruction']['text']
             else:
-                self.instruction_text = str(current_episode.instruction)
+                self.instruction_text = str(obs['instruction'])
+        elif hasattr(self.env.current_episode, 'instruction'):
+            if hasattr(self.env.current_episode.instruction, 'instruction_text'):
+                self.instruction_text = self.env.current_episode.instruction.instruction_text
+            elif hasattr(self.env.current_episode.instruction, 'text'):
+                self.instruction_text = self.env.current_episode.instruction.text
+            else:
+                self.instruction_text = str(self.env.current_episode.instruction)
         else:
             self.instruction_text = "No instruction available"
         
+        print(f"[INFO] Episode Index: {self.episode_index}")
         print(f"[INFO] Episode ID: {self.episode_id}")
         print(f"[INFO] 场景: {self.scene_id}")
         print(f"[INFO] Instruction: {self.instruction_text[:100]}..." if len(self.instruction_text) > 100 else f"[INFO] Instruction: {self.instruction_text}")
         
-        return obs[0]
+        return obs
     
     def initialize_modules(self):
         """初始化建图模块"""
@@ -292,22 +301,17 @@ class MinimalMappingTest:
             print(f"\n[STEP 3.{step+1}] 左转 30° (总计 {(step+1)*30}°)...")
             
             # ===== 1. 执行左转动作 =====
-            actions = [{"action": HabitatSimActions.TURN_LEFT}]
-            outputs = self.envs.step(actions)
-            obs, _, dones, infos = [list(x) for x in zip(*outputs)]
-            
-            if dones[0]:
-                print("[WARNING] Episode 提前结束")
-                break
+            actions = {"action": HabitatSimActions.TURN_LEFT}
+            obs = self.env.step(actions)
             
             # ===== 2. 预处理观察 =====
-            state, rgb, depth, annotated_rgb = self.preprocess_observation(obs[0])
+            state, rgb, depth, annotated_rgb = self.preprocess_observation(obs)
             
             # ===== 3. 批处理观察 =====
             batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
             
             # ===== 4. 获取位姿 =====
-            poses = torch.from_numpy(np.array([obs[0]['sensor_pose']])).float().to(self.device)
+            poses = torch.from_numpy(np.array([obs['sensor_pose']])).float().to(self.device)
             
             # ===== 5. 映射模块前向传播 =====
             self.mapping_module(batch_obs, poses)
@@ -557,8 +561,8 @@ class MinimalMappingTest:
         
         finally:
             # 清理
-            if hasattr(self, 'envs'):
-                self.envs.close()
+            if hasattr(self, 'env') and self.env:
+                self.env.close()
 
 
 def main():
@@ -573,10 +577,10 @@ def main():
         help="配置文件路径"
     )
     parser.add_argument(
-        "--instruction-id",
-        type=str,
-        default=None,
-        help="指定Instruction ID (例如: 1234)"
+        "--episode-index",
+        type=int,
+        default=0,
+        help="指定 Episode 索引 (例如: 0, 1, 2...)"
     )
     parser.add_argument(
         "opts",
@@ -597,19 +601,14 @@ def main():
     config.MAP.VISUALIZE = False
     config.MAP.PRINT_IMAGES = False
     
-    # 如果指定了instruction_id
-    if args.instruction_id is not None:
-        print(f"\n[INFO] 目标Instruction ID: {args.instruction_id}")
+    # 显示 episode 索引
+    if args.episode_index is not None:
+        print(f"\n[INFO] Episode Index: {args.episode_index}")
     
     config.freeze()
     
-    # 运行测试
-    tester = MinimalMappingTest(config)
-    
-    # 设置目标instruction_id
-    if args.instruction_id is not None:
-        tester.target_instruction_id = args.instruction_id
-    
+    # 运行测试（传递 episode_index）
+    tester = MinimalMappingTest(config, episode_index=args.episode_index)
     tester.run()
 
 
