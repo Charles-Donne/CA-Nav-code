@@ -102,7 +102,11 @@ class GroundedSAM(Segment):
     def segment(self, image: VisualObservation, **kwargs) -> Tuple[np.ndarray, List[str], np.ndarray]:
         classes = kwargs.get("classes", [])
         box_annotator = sv.BoxAnnotator()
-        mask_annotator = sv.MaskAnnotator()
+        # 兼容旧版本 supervision（没有 MaskAnnotator）
+        try:
+            mask_annotator = sv.MaskAnnotator()
+        except AttributeError:
+            mask_annotator = None
         labels = []
         # t1 = time.time()
         detections = self.grounding_dino_model.predict_with_classes(
