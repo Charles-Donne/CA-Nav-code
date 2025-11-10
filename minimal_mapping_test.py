@@ -70,11 +70,24 @@ class MinimalMappingTest:
         # 导入 make_dataset
         from habitat import make_dataset, Env
         
+        # 临时修改配置以加载所有场景
+        task_config = self.config.TASK_CONFIG.clone()
+        task_config.defrost()
+        
+        # 确保加载所有场景（移除场景过滤）
+        if not hasattr(task_config.DATASET, 'CONTENT_SCENES') or len(task_config.DATASET.CONTENT_SCENES) == 0:
+            task_config.DATASET.CONTENT_SCENES = ['*']
+        
+        task_config.freeze()
+        
         # 加载数据集
         print("加载数据集...")
+        print(f"数据集路径: {task_config.DATASET.DATA_PATH}")
+        print(f"Split: {task_config.DATASET.SPLIT}")
+        
         dataset = make_dataset(
-            id_dataset=self.config.TASK_CONFIG.DATASET.TYPE,
-            config=self.config.TASK_CONFIG.DATASET
+            id_dataset=task_config.DATASET.TYPE,
+            config=task_config.DATASET
         )
         print(f"✓ 数据集加载完成 ({len(dataset.episodes)} episodes)")
         
@@ -98,7 +111,7 @@ class MinimalMappingTest:
         
         # 初始化环境（使用筛选后的 dataset）
         try:
-            self.env = Env(self.config.TASK_CONFIG, dataset)
+            self.env = Env(task_config, dataset)
             print(f"✓ 环境初始化完成")
         except Exception as e:
             print(f"✗ 环境初始化失败: {e}")
