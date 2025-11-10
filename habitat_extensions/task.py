@@ -88,7 +88,7 @@ class VLNCEDatasetV1(Dataset):
             return
 
         dataset_filename = config.DATA_PATH.format(split=config.SPLIT)
-        llm_replys_filename = config.LLM_REPLYS_PATH
+        llm_replys_filename = config.get('LLM_REPLYS_PATH', None)  # 改为可选参数
         with gzip.open(dataset_filename, "rt") as f:
             self.from_json(f.read(), 
                            scenes_dir=config.SCENES_DIR, 
