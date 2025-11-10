@@ -70,26 +70,29 @@ class MinimalMappingTest:
         # 导入 make_dataset
         from habitat import make_dataset, Env
         
-        # 临时修改配置以加载所有场景
-        task_config = self.config.TASK_CONFIG.clone()
-        task_config.defrost()
-        
-        # 确保加载所有场景（移除场景过滤）
-        if not hasattr(task_config.DATASET, 'CONTENT_SCENES') or len(task_config.DATASET.CONTENT_SCENES) == 0:
-            task_config.DATASET.CONTENT_SCENES = ['*']
-        
-        task_config.freeze()
-        
-        # 加载数据集
-        print("加载数据集...")
-        print(f"数据集路径: {task_config.DATASET.DATA_PATH}")
-        print(f"Split: {task_config.DATASET.SPLIT}")
-        
+        # 加载数据集（直接使用原始配置，像 llm_vlm_control.py 一样）
+        print("Loading dataset...")
         dataset = make_dataset(
-            id_dataset=task_config.DATASET.TYPE,
-            config=task_config.DATASET
+            id_dataset=self.config.TASK_CONFIG.DATASET.TYPE,
+            config=self.config.TASK_CONFIG.DATASET
         )
-        print(f"✓ 数据集加载完成 ({len(dataset.episodes)} episodes)")
+        print(f"✓ Dataset loaded ({len(dataset.episodes)} episodes)")
+        
+        # 调试信息
+        if len(dataset.episodes) > 0:
+            print(f"[DEBUG] 数据集类型: {self.config.TASK_CONFIG.DATASET.TYPE}")
+            print(f"[DEBUG] Split: {self.config.TASK_CONFIG.DATASET.SPLIT}")
+            print(f"[DEBUG] 数据路径: {self.config.TASK_CONFIG.DATASET.DATA_PATH}")
+            
+            # 检查场景分布
+            unique_scenes = set()
+            for ep in dataset.episodes[:min(100, len(dataset.episodes))]:
+                scene = ep.scene_id.split('/')[-1].split('.')[0]
+                unique_scenes.add(scene)
+            print(f"[DEBUG] 前{min(100, len(dataset.episodes))}个episodes包含 {len(unique_scenes)} 个不同场景")
+            
+            if len(dataset.episodes) <= 10:
+                print(f"[DEBUG] 所有场景: {sorted(unique_scenes)}")
         
         # 选择 episode
         if self.episode_index is not None:
@@ -111,7 +114,7 @@ class MinimalMappingTest:
         
         # 初始化环境（使用筛选后的 dataset）
         try:
-            self.env = Env(task_config, dataset)
+            self.env = Env(self.config.TASK_CONFIG, dataset)
             print(f"✓ 环境初始化完成")
         except Exception as e:
             print(f"✗ 环境初始化失败: {e}")
