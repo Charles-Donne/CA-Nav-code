@@ -331,7 +331,8 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                 mode='constant') 
          for state in n_states], axis=0)
         
-        return torch.from_numpy(batch).to(self.device)
+        # 确保返回 float32 类型，避免 depth_utils 中的类型不匹配问题
+        return torch.from_numpy(batch).float().to(self.device)
     
     def _random_policy(self):
         """随机策略（用于测试）"""
