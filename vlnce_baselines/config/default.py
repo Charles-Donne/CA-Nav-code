@@ -76,7 +76,7 @@ def get_config(
     config_paths: Optional[Union[List[str], str]] = None,
     opts: Optional[list] = None,
 ) -> CN:
-    r"""Create a unified config with default values. Initialized from the
+    """Create a unified config with default values. Initialized from the
     habitat_baselines default config. Overwritten by values from
     `config_paths` and overwritten by options from `opts`.
     Args:
