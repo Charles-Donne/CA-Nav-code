@@ -78,7 +78,14 @@ class GroundedSAM(Segment):
         return np.array(result_masks)
     
     def _process_detections(self, detections: sv.Detections) -> sv.Detections:
-        box_areas = detections.box_area
+        # 兼容旧版本 supervision：手动计算 box_area
+        if hasattr(detections, 'box_area'):
+            box_areas = detections.box_area
+        else:
+            # 手动计算：(x2 - x1) * (y2 - y1)
+            box_areas = (detections.xyxy[:, 2] - detections.xyxy[:, 0]) * \
+                       (detections.xyxy[:, 3] - detections.xyxy[:, 1])
+        
         i = len(detections) - 1
         while i >= 0:
             if box_areas[i] / (self.width * self.height) < 0.95:

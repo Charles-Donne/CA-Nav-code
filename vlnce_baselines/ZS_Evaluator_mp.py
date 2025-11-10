@@ -11,6 +11,7 @@ from fastdtw import fastdtw
 from typing import List, Any, Dict
 from collections import defaultdict
 from skimage.morphology import binary_closing
+import inspect
 
 import torch
 from torch import Tensor
@@ -40,6 +41,17 @@ from vlnce_baselines.utils.constant import base_classes, map_channels
 from pyinstrument import Profiler
 import warnings
 warnings.filterwarnings('ignore')
+
+
+# 兼容不同版本的 scikit-image
+def _binary_closing_compat(image, footprint):
+    """兼容 scikit-image 旧版本的 binary_closing 调用"""
+    sig = inspect.signature(binary_closing)
+    if 'footprint' in sig.parameters:
+        return binary_closing(image, footprint=footprint)
+    else:
+        # 旧版本使用 selem 参数
+        return binary_closing(image, selem=footprint)
 
 
 @baseline_registry.register_trainer(name="ZS-Evaluator-mp")
@@ -425,7 +437,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
         floor = remove_small_objects(floor, min_size=400).astype(bool)
-        floor = binary_closing(floor, footprint=disk(kernel_size))
+        floor = _binary_closing_compat(floor, disk(kernel_size))
         
         return floor
         
@@ -449,17 +461,17 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         
         # 形态学处理（闭运算，填充小孔）
         footprint = disk(kernel_size)
-        obstacles_closed = binary_closing(obstacles, footprint=footprint)
-        objects_closed = binary_closing(objects, footprint=footprint)
+        obstacles_closed = _binary_closing_compat(obstacles, footprint)
+        objects_closed = _binary_closing_compat(objects, footprint)
         navigable = np.logical_or.reduce(full_map[map_channels:, ...][navigable_index])
         navigable = np.logical_and(navigable, np.logical_not(objects))
-        navigable_closed = binary_closing(navigable, footprint=footprint)
+        navigable_closed = _binary_closing_compat(navigable, footprint)
         
         # 计算不可穿越区域
         untraversible = np.logical_or(objects_closed, obstacles_closed)
         untraversible[navigable_closed == 1] = 0
         untraversible = remove_small_objects(untraversible, min_size=64)
-        untraversible = binary_closing(untraversible, footprint=disk(3))
+        untraversible = _binary_closing_compat(untraversible, disk(3))
         traversible = np.logical_not(untraversible)
 
         # 计算地板区域
@@ -467,11 +479,11 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
         floor = remove_small_objects(floor, min_size=400).astype(bool)
-        floor = binary_closing(floor, footprint=footprint)
+        floor = _binary_closing_compat(floor, footprint)
         traversible = np.logical_or(floor, traversible)
         
         # 计算边界（探索边缘）
-        explored_area = binary_closing(explored_area, footprint=footprint)
+        explored_area = _binary_closing_compat(explored_area, footprint)
         contours, _ = cv2.findContours(explored_area.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         image = np.zeros(full_map.shape[-2:], dtype=np.uint8)
         image = cv2.drawContours(image, contours, -1, (255, 255, 255), thickness=3)
@@ -922,7 +934,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                 search_destination = True  # 开始搜索最终目标
                 print("start to search destination")
                 
-                
+
             # ┌─────────────────────────────────────────────────────────────┐
             # │ 4.5 约束检查和子任务切换 (状态机核心逻辑)                    │
             # └─────────────────────────────────────────────────────────────┘
