@@ -49,46 +49,31 @@ class MinimalMappingTest:
         self.map_shape = (config.MAP.MAP_SIZE_CM // self.resolution,
                           config.MAP.MAP_SIZE_CM // self.resolution)
         
-        # 创建输出目录（稍后根据 episode_id 创建子目录）
+        # 输出目录
         self.output_dir = "data/minimal_mapping_test"
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # Episode 索引（替代 instruction_id）
         self.episode_index = episode_index
-        self.env = None  # 单个环境（不是 VectorEnv）
-        self.episode_output_dir = None  # 根据 episode_id 创建的子目录
+        self.env = None
+        self.episode_output_dir = None
         
-        print(f"[INFO] 输出目录: {self.output_dir}")
-        print(f"[INFO] 地图尺寸: {self.map_shape}")
-        print(f"[INFO] 地图分辨率: {self.resolution} cm/pixel")
+        # 箭头配置（可自定义）
+        self.agent_icon_path = None  # 设置为图标路径（如 "assets/agent_arrow.png"）使用贴图
+        self.use_icon = False  # 是否使用图标（False=三角形箭头，True=图标贴图）
         
     def initialize_environment(self):
         """初始化环境（通过 EPISODES_ALLOWED 配置已经过滤）"""
-        print("\n[STEP 1] 初始化 Habitat 环境...")
+        print("\n=== 初始化环境 ===")
         
-        # 加载数据集（已通过 config.TASK_CONFIG.DATASET.EPISODES_ALLOWED 过滤）
-        print("Loading dataset...")
+        # 加载数据集
         dataset = make_dataset(
             id_dataset=self.config.TASK_CONFIG.DATASET.TYPE,
             config=self.config.TASK_CONFIG.DATASET
         )
-        print(f"✓ Dataset loaded ({len(dataset.episodes)} episodes)")
-        
-        # 调试信息
-        if len(dataset.episodes) > 0:
-            print(f"[DEBUG] 数据集类型: {self.config.TASK_CONFIG.DATASET.TYPE}")
-            print(f"[DEBUG] Split: {self.config.TASK_CONFIG.DATASET.SPLIT}")
-            print(f"[DEBUG] Episode ID: {dataset.episodes[0].episode_id}")
+        print(f"✓ 加载 {len(dataset.episodes)} 个 episodes")
         
         # 初始化环境
-        try:
-            self.env = Env(self.config.TASK_CONFIG, dataset)
-            print(f"✓ 环境初始化完成")
-        except Exception as e:
-            print(f"✗ 环境初始化失败: {e}")
-            raise
-        
-        # 重置环境获取初始观察
+        self.env = Env(self.config.TASK_CONFIG, dataset)
         obs = self.env.reset()
         
         # 获取 episode 信息
@@ -97,108 +82,70 @@ class MinimalMappingTest:
         
         # 获取 instruction
         if hasattr(obs, 'get') and 'instruction' in obs:
-            if isinstance(obs['instruction'], dict) and 'text' in obs['instruction']:
-                self.instruction_text = obs['instruction']['text']
-            else:
-                self.instruction_text = str(obs['instruction'])
+            self.instruction_text = obs['instruction'].get('text', str(obs['instruction']))
         elif hasattr(self.env.current_episode, 'instruction'):
-            if hasattr(self.env.current_episode.instruction, 'instruction_text'):
-                self.instruction_text = self.env.current_episode.instruction.instruction_text
-            elif hasattr(self.env.current_episode.instruction, 'text'):
-                self.instruction_text = self.env.current_episode.instruction.text
-            else:
-                self.instruction_text = str(self.env.current_episode.instruction)
+            self.instruction_text = getattr(self.env.current_episode.instruction, 'instruction_text', 
+                                           getattr(self.env.current_episode.instruction, 'text', 
+                                                  str(self.env.current_episode.instruction)))
         else:
-            self.instruction_text = "No instruction available"
+            self.instruction_text = "No instruction"
         
-        print(f"[INFO] Episode ID: {self.episode_id}")
-        print(f"[INFO] 场景: {self.scene_id}")
-        print(f"[INFO] Instruction: {self.instruction_text[:100]}..." if len(self.instruction_text) > 100 else f"[INFO] Instruction: {self.instruction_text}")
-        
-        # 根据 episode_id 创建输出目录
+        # 创建 episode 输出目录
         self.episode_output_dir = os.path.join(self.output_dir, f"episode_{self.episode_id}")
-        os.makedirs(self.episode_output_dir, exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/rgb", exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/depth", exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/semantic", exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/maps", exist_ok=True)
-        print(f"[INFO] Episode 输出目录: {self.episode_output_dir}")
+        for subdir in ['rgb', 'depth', 'semantic', 'maps']:
+            os.makedirs(f"{self.episode_output_dir}/{subdir}", exist_ok=True)
+        
+        print(f"Episode {self.episode_id} | Scene: {self.scene_id}")
+        print(f"Instruction: {self.instruction_text[:80]}{'...' if len(self.instruction_text) > 80 else ''}")
         
         return obs
     
     def initialize_modules(self):
         """初始化建图模块"""
-        print("\n[STEP 2] 初始化建图模块...")
+        print("\n=== 初始化建图模块 ===")
         
         # 语义分割模块
         self.segment_module = GroundedSAM(self.config, self.device)
-        print("[INFO] GroundedSAM 初始化完成")
         
         # 语义地图模块
-        # 注意：mapping_module 内部维护两套地图：
-        #   • full_map (480×480): 全局地图，对应 24m×24m 物理空间
-        #   • local_map (240×240): 局部地图，以智能体为中心的 12m×12m 活动窗口
-        # 观察数据先投影到 local_map，再写回 full_map 对应区域
         self.mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
         self.mapping_module.eval()
-        print("[INFO] Semantic_Mapping 初始化完成")
-        # 注意：full_w, full_h 等属性要在 init_map_and_pose() 调用后才会初始化
         
         # 检测类别
         self.detected_classes = OrderedSet()
-        self.classes = base_classes.copy()  # ["floor", "wall", "door", ...]
+        self.classes = base_classes.copy()
+        
+        print("✓ GroundedSAM & Semantic_Mapping 初始化完成")
         
     def preprocess_observation(self, obs):
         """预处理观察：语义分割 + 深度预处理"""
-        # 提取 RGB 和 Depth
         rgb = obs['rgb'].astype(np.uint8)
-        depth = obs['depth']
+        depth = obs['depth'][:, :, 0] * 1
         
-        # ============ 深度预处理（与 ZS_Evaluator_mp 一致）============
-        # 1. 移除通道维度
-        depth = depth[:, :, 0] * 1
-        
-        # 2. 填充缺失深度值（用该列的最大值填充）
+        # 深度预处理
         for i in range(depth.shape[1]):
             depth[:, i][depth[:, i] == 0.] = depth[:, i].max()
         
-        # 3. 将过远的像素设为无效
-        mask2 = depth > 0.99
-        depth[mask2] = 0.
-        
-        # 4. 将无效像素设为视野范围（100米）
-        mask1 = depth == 0
-        depth[mask1] = 100.0
-        
-        # 5. 归一化到厘米单位（关键步骤！）
-        min_depth = 0.5  # 从 zs_vlnce_task.yaml: DEPTH_SENSOR.MIN_DEPTH
-        max_depth = 5.0  # 从 zs_vlnce_task.yaml: DEPTH_SENSOR.MAX_DEPTH
-        depth = min_depth * 100.0 + depth * max_depth * 100.0
-        # 转换: [0, 1] → [50cm, 550cm]
-        
-        # 6. 恢复通道维度
+        depth[depth > 0.99] = 0.
+        depth[depth == 0] = 100.0
+        depth = 0.5 * 100.0 + depth * 5.0 * 100.0  # 转换到厘米: [50, 550]
         depth = depth[:, :, np.newaxis]
-        # ============================================================
         
         # 语义分割
         masks, labels, annotated_image, detections = \
             self.segment_module.segment(rgb[:,:,::-1], classes=self.classes)
         
-        print(f"[INFO] 检测到类别: {labels}")
-        
         # 处理标签
-        class_names = []
-        for label in labels:
-            class_name = " ".join(label.split(' ')[:-1])
-            class_names.append(class_name)
-            self.detected_classes.add(class_name)
+        class_names = [" ".join(label.split(' ')[:-1]) for label in labels]
+        for name in class_names:
+            self.detected_classes.add(name)
         
         # 处理掩码
         if masks.shape != (0,):
             from collections import defaultdict
             same_label_indexs = defaultdict(list)
-            for idx, item in enumerate(class_names):
-                same_label_indexs[item].append(idx)
+            for idx, name in enumerate(class_names):
+                same_label_indexs[name].append(idx)
             
             combined_mask = np.zeros((len(same_label_indexs), *masks.shape[1:]))
             for i, indexs in enumerate(same_label_indexs.values()):
@@ -211,54 +158,35 @@ class MinimalMappingTest:
             final_masks = np.zeros((len(self.detected_classes), 480, 640))
         
         # 合并 RGB + Depth + Semantic
-        state = np.concatenate((rgb, depth), axis=2).transpose(2, 0, 1)  # (4, 480, 640)
-        sem_masks = final_masks.transpose(1, 2, 0)  # (480, 640, N)
-        state = np.concatenate((state[:3], state[3:4], sem_masks.transpose(2,0,1)), axis=0)  # (4+N, 480, 640)
-        
-        # 不需要 resize，直接使用原始尺寸（与配置文件中的 FRAME_WIDTH/HEIGHT 一致）
-        # state 已经是 (4+N, 480, 640)，符合 mapping 模块的预期
+        state = np.concatenate((rgb, depth), axis=2).transpose(2, 0, 1)
+        sem_masks = final_masks.transpose(1, 2, 0)
+        state = np.concatenate((state[:3], state[3:4], sem_masks.transpose(2,0,1)), axis=0)
         
         return state, rgb, depth, annotated_image
     
     def _process_map(self, step: int, full_map: np.ndarray, kernel_size: int=3) -> tuple:
-        """处理语义地图，提取导航相关信息（参考 ZS_Evaluator_mp.py）
-        
-        Args:
-            step: 当前步数
-            full_map: (N+4, H, W) 语义地图
-            kernel_size: 形态学操作的核大小
-            
-        Returns:
-            traversible: 可穿越区域
-            floor: 地板区域
-            frontiers: 边界区域（探索边缘）
-        """
-        # 区分可导航和不可导航的类别
+        """处理语义地图，提取导航相关信息"""
         navigable_index = process_navigable_classes(self.detected_classes)
         not_navigable_index = [i for i in range(len(self.detected_classes)) if i not in navigable_index]
         full_map = remove_small_objects(full_map.astype(bool), min_size=64)
         
-        # 提取地图通道
-        obstacles = full_map[0, ...].astype(bool)  # 障碍物
-        explored_area = full_map[1, ...].astype(bool)  # 已探索区域
+        obstacles = full_map[0, ...].astype(bool)
+        explored_area = full_map[1, ...].astype(bool)
         objects = np.sum(full_map[map_channels:, ...][not_navigable_index], axis=0).astype(bool) if len(not_navigable_index) > 0 else np.zeros_like(obstacles)
         
-        # 形态学处理（闭运算，填充小孔）
-        footprint = disk(kernel_size)  # 新版 scikit-image 使用 footprint 替代 selem
+        footprint = disk(kernel_size)
         obstacles_closed = binary_closing(obstacles, footprint=footprint)
         objects_closed = binary_closing(objects, footprint=footprint)
         navigable = np.logical_or.reduce(full_map[map_channels:, ...][navigable_index]) if len(navigable_index) > 0 else np.zeros_like(obstacles)
         navigable = np.logical_and(navigable, np.logical_not(objects))
         navigable_closed = binary_closing(navigable, footprint=footprint)
         
-        # 计算不可穿越区域
         untraversible = np.logical_or(objects_closed, obstacles_closed)
         untraversible[navigable_closed == 1] = 0
         untraversible = remove_small_objects(untraversible, min_size=64)
         untraversible = binary_closing(untraversible, footprint=disk(3))
         traversible = np.logical_not(untraversible)
 
-        # 计算地板区域
         free_mask = 1 - np.logical_or(obstacles, objects)
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
@@ -266,7 +194,6 @@ class MinimalMappingTest:
         floor = binary_closing(floor, footprint=footprint)
         traversible = np.logical_or(floor, traversible)
         
-        # 计算边界（探索边缘）
         explored_area = binary_closing(explored_area, footprint=footprint)
         contours, _ = cv2.findContours(explored_area.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         image = np.zeros(full_map.shape[-2:], dtype=np.uint8)
@@ -277,140 +204,180 @@ class MinimalMappingTest:
         return traversible, floor, frontiers.astype(np.uint8)
     
     def _save_observation_images(self, step: int, rgb: np.ndarray, depth: np.ndarray, annotated_rgb: np.ndarray):
-        """保存每一步的观察图像
+        """保存每一步的观察图像"""
+        # 保存 RGB（PNG无损格式）
+        Image.fromarray(rgb).save(f"{self.episode_output_dir}/rgb/step_{step:02d}.png")
         
-        Args:
-            step: 当前步数
-            rgb: RGB 图像 (H, W, 3)
-            depth: Depth 图像 (H, W, 1)
-            annotated_rgb: 标注后的 RGB 图像
-        """
-        # 保存原始 RGB
-        rgb_img = Image.fromarray(rgb)
-        rgb_img.save(f"{self.episode_output_dir}/rgb/step_{step:02d}.png")
-        
-        # 保存标注后的 RGB（语义分割可视化）
+        # 保存语义分割标注
         if annotated_rgb is not None:
-            annotated_img = Image.fromarray(annotated_rgb)
-            annotated_img.save(f"{self.episode_output_dir}/semantic/step_{step:02d}_annotated.png")
+            Image.fromarray(annotated_rgb).save(f"{self.episode_output_dir}/semantic/step_{step:02d}.png")
         
-        # 保存 Depth（归一化到 0-255 用于可视化）
-        depth_normalized = depth[:, :, 0]  # 去掉通道维度
-        depth_normalized = np.clip(depth_normalized, 50, 550)  # 限制到 50-550cm
+        # 保存深度图（灰度 + 彩色）
+        depth_normalized = np.clip(depth[:, :, 0], 50, 550)
         depth_normalized = ((depth_normalized - 50) / 500 * 255).astype(np.uint8)
-        depth_img = Image.fromarray(depth_normalized)
-        depth_img.save(f"{self.episode_output_dir}/depth/step_{step:02d}.png")
+        Image.fromarray(depth_normalized).save(f"{self.episode_output_dir}/depth/step_{step:02d}.png")
         
-        # 保存带颜色映射的深度图
         depth_colored = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-        depth_colored_img = Image.fromarray(cv2.cvtColor(depth_colored, cv2.COLOR_BGR2RGB))
-        depth_colored_img.save(f"{self.episode_output_dir}/depth/step_{step:02d}_colored.png")
+        Image.fromarray(cv2.cvtColor(depth_colored, cv2.COLOR_BGR2RGB)).save(
+            f"{self.episode_output_dir}/depth/step_{step:02d}_color.png"
+        )
     
     def look_around_and_map(self):
         """环视 360° 并建图 - 12次旋转，每次30°"""
-        print("\n[STEP 3] 环视 360° 建图 (12 × 30°)...")
+        print("\n=== 环视建图 (12 × 30°) ===")
         
         # 初始化地图
         self.mapping_module.init_map_and_pose(num_detected_classes=len(self.detected_classes))
-        print(f"[INFO] 地图初始化完成，检测类别数: {len(self.detected_classes)}")
-        print(f"[INFO] 全局地图尺寸: {self.mapping_module.full_w} × {self.mapping_module.full_h} pixels")
-        print(f"[INFO] 局部地图尺寸: {self.mapping_module.local_w} × {self.mapping_module.local_h} pixels")
         
         maps_history = []
         
-        # ========== 12次旋转，每次30° ==========
         for step in range(12):
-            print(f"\n[STEP 3.{step+1}] 左转 30° (总计 {(step+1)*30}°)...")
+            # 执行左转
+            obs = self.env.step({"action": HabitatSimActions.TURN_LEFT})
             
-            # ===== 1. 执行左转动作 =====
-            actions = {"action": HabitatSimActions.TURN_LEFT}
-            obs = self.env.step(actions)
-            
-            # ===== 2. 预处理观察 =====
+            # 预处理 & 保存图像
             state, rgb, depth, annotated_rgb = self.preprocess_observation(obs)
-            
-            # ===== 2.1 保存 RGB 和 Depth 图像 =====
             self._save_observation_images(step, rgb, depth, annotated_rgb)
             
-            # ===== 3. 批处理观察 =====
+            # 建图
             batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
-            
-            # ===== 4. 获取位姿 =====
             poses = torch.from_numpy(np.array([obs['sensor_pose']])).float().to(self.device)
             
-            # ===== 5. 映射模块前向传播 =====
             self.mapping_module(batch_obs, poses)
+            full_map, full_pose, _ = self.mapping_module.update_map(step, self.detected_classes, self.episode_id)
             
-            # ===== 6. 更新全局地图 =====
-            full_map, full_pose, one_step_map = \
-                self.mapping_module.update_map(step, self.detected_classes, self.episode_id)
-            
-            # ===== 7. 清空单步地图 =====
             self.mapping_module.one_step_full_map.fill_(0.)
             self.mapping_module.one_step_local_map.fill_(0.)
             
-            # ===== 8. 处理导航地图 =====
             traversible, floor, frontiers = self._process_map(step, full_map[0])
             
-            # ===== 9. 打印调试信息 =====
-            print(f"[INFO] 位姿: [{full_pose[0,0]:.2f}, {full_pose[0,1]:.2f}, {full_pose[0,2]:.2f}]")
-            print(f"[DEBUG] 障碍物: {np.count_nonzero(full_map[0,0])}, 探索区域: {np.count_nonzero(full_map[0,1])}")
-            
-            # ===== 10. 保存地图 =====
+            # 保存地图状态
             maps_history.append({
                 'full_map': full_map.copy(),
                 'full_pose': full_pose.copy(),
                 'floor': floor.copy(),
                 'traversible': traversible.copy(),
             })
+            
+            if (step + 1) % 3 == 0:
+                print(f"✓ Step {step+1}/12 完成")
         
         return maps_history
     
     def save_maps(self, maps_history):
-        """保存地图数据和可视化（简化版）"""
-        print("\n[STEP 4] 保存地图...")
+        """保存地图数据和可视化"""
+        print("\n=== 保存地图 ===")
         
         # 保存原始数据
         np.save(f"{self.episode_output_dir}/maps_history.npy", maps_history)
-        print(f"[INFO] 保存地图历史: {self.episode_output_dir}/maps_history.npy")
         
-        final_map = maps_history[-1]['full_map'][0]
-        final_pose = maps_history[-1]['full_pose'][0]
-        final_floor = maps_history[-1]['floor']
-        
-        # 获取局部地图边界
-        if hasattr(self.mapping_module, 'lmb'):
-            lmb = self.mapping_module.lmb[0].astype(int)
-        else:
-            lmb = None
-        
-        # 生成地图演化动画（全局地图 + 局部地图）
+        # 生成地图演化动画
         self._save_map_evolution(maps_history)
         
         # 打印统计信息
         self._print_final_statistics(maps_history)
     
-    def _draw_arrow(self, img, center, angle_rad, length=15, color=(0, 0, 139), thickness=3):
-        """在地图上画箭头表示智能体朝向
+    def _draw_arrow(self, img, center, angle_rad, length=30, color=(0, 0, 255), thickness=2):
+        """在地图上画箭头表示智能体朝向（使用三角形）
         
         Args:
             img: numpy array (H, W, 3)
             center: (x, y) 中心位置
             angle_rad: 朝向角度（弧度）
             length: 箭头长度
-            color: RGB颜色 (深蓝色 默认)
+            color: RGB颜色 (红色 默认)
             thickness: 线条粗细
         """
-        cx, cy = center
-        # 计算箭头端点
-        dx = int(length * np.cos(angle_rad))
-        dy = int(length * np.sin(angle_rad))
-        end_x, end_y = cx + dx, cy - dy  # 注意y轴翻转
+        cx, cy = int(center[0]), int(center[1])
         
-        # 画箭头主干
-        cv2.arrowedLine(img, (int(cx), int(cy)), (end_x, end_y), 
-                       color, thickness, tipLength=0.4)
+        # 计算箭头三个顶点（等腰三角形）
+        # 注意：地图坐标系 y轴向下，需要翻转
+        tip_x = cx + int(length * np.cos(angle_rad))
+        tip_y = cy - int(length * np.sin(angle_rad))  # y轴翻转
+        
+        # 箭头底部两个顶点（夹角120度）
+        base_angle1 = angle_rad + np.pi * 2.5 / 3  # 150度
+        base_angle2 = angle_rad - np.pi * 2.5 / 3  # -150度
+        base_length = length * 0.5
+        
+        base1_x = cx + int(base_length * np.cos(base_angle1))
+        base1_y = cy - int(base_length * np.sin(base_angle1))
+        
+        base2_x = cx + int(base_length * np.cos(base_angle2))
+        base2_y = cy - int(base_length * np.sin(base_angle2))
+        
+        # 绘制实心三角形
+        triangle = np.array([[tip_x, tip_y], [base1_x, base1_y], [base2_x, base2_y]], dtype=np.int32)
+        cv2.fillPoly(img, [triangle], color)
+        
+        # 绘制边框使其更清晰
+        cv2.polylines(img, [triangle], True, (0, 0, 0), thickness=1)
+        
+        # 在中心画一个圆表示智能体位置
+        cv2.circle(img, (cx, cy), radius=int(length*0.3), color=color, thickness=-1)
+        cv2.circle(img, (cx, cy), radius=int(length*0.3), color=(0, 0, 0), thickness=1)
+        
         return img
+    
+    def _draw_arrow_with_icon(self, img, center, angle_rad, icon_path=None, scale=1.0):
+        """使用图标贴图表示智能体（可选方法）
+        
+        Args:
+            img: numpy array (H, W, 3)
+            center: (x, y) 中心位置
+            angle_rad: 朝向角度（弧度）
+            icon_path: 图标文件路径（PNG格式，建议透明背景）
+            scale: 缩放比例
+        """
+        cx, cy = int(center[0]), int(center[1])
+        
+        # 如果没有提供图标，使用默认箭头
+        if icon_path is None or not os.path.exists(icon_path):
+            return self._draw_arrow(img, center, angle_rad)
+        
+        try:
+            # 加载图标
+            icon = cv2.imread(icon_path, cv2.IMREAD_UNCHANGED)  # 保留alpha通道
+            if icon is None:
+                return self._draw_arrow(img, center, angle_rad)
+            
+            # 缩放图标
+            h, w = icon.shape[:2]
+            new_h, new_w = int(h * scale), int(w * scale)
+            icon = cv2.resize(icon, (new_w, new_h))
+            
+            # 旋转图标（角度转换：弧度 -> 度数，y轴翻转）
+            angle_deg = -np.degrees(angle_rad)  # 负号因为y轴翻转
+            M = cv2.getRotationMatrix2D((new_w/2, new_h/2), angle_deg, 1.0)
+            icon_rotated = cv2.warpAffine(icon, M, (new_w, new_h), 
+                                         flags=cv2.INTER_LINEAR,
+                                         borderMode=cv2.BORDER_CONSTANT,
+                                         borderValue=(0, 0, 0, 0))
+            
+            # 计算粘贴位置
+            y1, y2 = cy - new_h//2, cy + new_h//2
+            x1, x2 = cx - new_w//2, cx + new_w//2
+            
+            # 边界检查
+            if y1 < 0 or x1 < 0 or y2 > img.shape[0] or x2 > img.shape[1]:
+                return self._draw_arrow(img, center, angle_rad)
+            
+            # 处理透明通道（如果有）
+            if icon_rotated.shape[2] == 4:
+                alpha = icon_rotated[:, :, 3] / 255.0
+                for c in range(3):
+                    img[y1:y2, x1:x2, c] = (
+                        alpha * icon_rotated[:, :, c] + 
+                        (1 - alpha) * img[y1:y2, x1:x2, c]
+                    ).astype(np.uint8)
+            else:
+                img[y1:y2, x1:x2] = icon_rotated[:, :, :3]
+            
+            return img
+        
+        except Exception as e:
+            print(f"[WARNING] 加载图标失败: {e}, 使用默认箭头")
+            return self._draw_arrow(img, center, angle_rad)
     
     def _create_colored_map(self, obstacles, floor, pose, map_title="Map"):
         """创建自定义配色的地图
@@ -419,7 +386,7 @@ class MinimalMappingTest:
         - 白色(255,255,255): 未探索区域
         - 浅蓝色(173,216,230): 地面 (LightBlue)
         - 深红色(139,0,0): 障碍物 (DarkRed)
-        - 深蓝色(0,0,139): 智能体箭头 (DarkBlue)
+        - 红色三角形: 智能体朝向
         """
         h, w = obstacles.shape
         # 初始化为白色背景
@@ -433,107 +400,89 @@ class MinimalMappingTest:
         obstacle_mask = obstacles > 0.1
         colored_map[obstacle_mask] = [139, 0, 0]  # DarkRed (RGB)
         
-        # 画智能体箭头
+        # 画智能体箭头（红色三角形或图标）
         pose_x = int(pose[0] * 100 / self.resolution)  # x -> col
         pose_y = int(pose[1] * 100 / self.resolution)  # y -> row
         angle = pose[2]  # 朝向角度（弧度）
         
-        colored_map = self._draw_arrow(colored_map, (pose_x, pose_y), angle, 
-                                       length=20, color=(0, 0, 139), thickness=4)
+        if self.use_icon and self.agent_icon_path:
+            colored_map = self._draw_arrow_with_icon(colored_map, (pose_x, pose_y), angle, 
+                                                     icon_path=self.agent_icon_path, scale=0.5)
+        else:
+            colored_map = self._draw_arrow(colored_map, (pose_x, pose_y), angle, 
+                                           length=25, color=(255, 0, 0), thickness=2)
         
         return colored_map
     
     def _save_map_evolution(self, maps_history):
-        """保存地图演化过程（全局地图 + 局部地图）"""
-        print(f"[INFO] 生成地图演化动画 ({len(maps_history)}帧)...")
+        """保存地图演化过程"""
+        for subdir in ['global', 'local', 'combined']:
+            os.makedirs(f"{self.episode_output_dir}/maps/{subdir}", exist_ok=True)
         
-        # 创建子目录
-        os.makedirs(f"{self.episode_output_dir}/maps/global", exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/maps/local", exist_ok=True)
-        os.makedirs(f"{self.episode_output_dir}/maps/combined", exist_ok=True)
+        lmb = self.mapping_module.lmb[0].astype(int) if hasattr(self.mapping_module, 'lmb') else None
         
         for i, map_data in enumerate(maps_history):
             full_map = map_data['full_map'][0]
             full_pose = map_data['full_pose'][0]
             floor = map_data['floor']
             
-            # 获取局部地图边界
-            if hasattr(self.mapping_module, 'lmb'):
-                lmb = self.mapping_module.lmb[0].astype(int)
-            else:
-                lmb = None
+            # 全局地图
+            global_colored = self._create_colored_map(full_map[0], floor, full_pose)
             
-            # ===== 1. 生成全局地图（单独） =====
-            global_colored = self._create_colored_map(
-                full_map[0], floor, full_pose, "Global Map"
-            )
-            
-            # 保存全局地图（带红框标注）
-            fig_global = plt.figure(figsize=(10, 10))
-            ax_global = fig_global.add_subplot(111)
-            ax_global.imshow(global_colored)
-            ax_global.set_title(f'Global Map - Step {i+1}/{len(maps_history)} (Rotation {(i+1)*30}°)', fontsize=14)
-            ax_global.axis('off')
+            fig = plt.figure(figsize=(10, 10))
+            ax = fig.add_subplot(111)
+            ax.imshow(global_colored)
+            ax.set_title(f'Global Map - Step {i+1}/12 ({(i+1)*30}°)', fontsize=14)
+            ax.axis('off')
             
             if lmb is not None:
                 from matplotlib.patches import Rectangle
                 rect = Rectangle((lmb[2], lmb[0]), lmb[3]-lmb[2], lmb[1]-lmb[0],
                                fill=False, edgecolor='red', linewidth=2, linestyle='--')
-                ax_global.add_patch(rect)
+                ax.add_patch(rect)
             
             plt.tight_layout()
-            plt.savefig(f"{self.episode_output_dir}/maps/global/global_step_{i:02d}.png", dpi=100, bbox_inches='tight')
-            plt.close(fig_global)
+            plt.savefig(f"{self.episode_output_dir}/maps/global/step_{i:02d}.png", dpi=100, bbox_inches='tight')
+            plt.close()
             
-            # ===== 2. 生成局部地图（单独） =====
+            # 局部地图
             if lmb is not None:
                 local_obstacles = full_map[0, lmb[0]:lmb[1], lmb[2]:lmb[3]]
                 local_floor = floor[lmb[0]:lmb[1], lmb[2]:lmb[3]]
                 
-                # 计算局部坐标系中的位姿
                 local_pose = full_pose.copy()
                 local_pose[0] = full_pose[0] - lmb[2] * self.resolution / 100
                 local_pose[1] = full_pose[1] - lmb[0] * self.resolution / 100
                 
-                local_colored = self._create_colored_map(
-                    local_obstacles, local_floor, local_pose, "Local Map"
-                )
+                local_colored = self._create_colored_map(local_obstacles, local_floor, local_pose)
                 
-                fig_local = plt.figure(figsize=(8, 8))
-                ax_local = fig_local.add_subplot(111)
-                ax_local.imshow(local_colored)
-                ax_local.set_title(f'Local Map (12m×12m) - Step {i+1}/{len(maps_history)}', fontsize=14)
-                ax_local.axis('off')
+                fig = plt.figure(figsize=(8, 8))
+                ax = fig.add_subplot(111)
+                ax.imshow(local_colored)
+                ax.set_title(f'Local Map - Step {i+1}/12', fontsize=14)
+                ax.axis('off')
                 plt.tight_layout()
-                plt.savefig(f"{self.episode_output_dir}/maps/local/local_step_{i:02d}.png", dpi=100, bbox_inches='tight')
-                plt.close(fig_local)
-            
-            # ===== 3. 生成组合图（全局+局部） =====
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-            
-            ax1.imshow(global_colored)
-            ax1.set_title(f'Global Map - Step {i+1}/{len(maps_history)} (Rotation {(i+1)*30}°)', fontsize=14)
-            ax1.axis('off')
-            
-            if lmb is not None:
+                plt.savefig(f"{self.episode_output_dir}/maps/local/step_{i:02d}.png", dpi=100, bbox_inches='tight')
+                plt.close()
+                
+                # 组合图
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+                ax1.imshow(global_colored)
+                ax1.set_title(f'Global ({(i+1)*30}°)', fontsize=14)
+                ax1.axis('off')
                 rect = Rectangle((lmb[2], lmb[0]), lmb[3]-lmb[2], lmb[1]-lmb[0],
                                fill=False, edgecolor='red', linewidth=2, linestyle='--')
                 ax1.add_patch(rect)
                 
                 ax2.imshow(local_colored)
-                ax2.set_title(f'Local Map (12m×12m) - Step {i+1}/{len(maps_history)}', fontsize=14)
-            else:
-                ax2.text(0.5, 0.5, 'No Local Map', ha='center', va='center')
-            ax2.axis('off')
-            
-            plt.tight_layout()
-            plt.savefig(f"{self.episode_output_dir}/maps/combined/combined_step_{i:02d}.png", dpi=100, bbox_inches='tight')
-            plt.close()
+                ax2.set_title('Local (12m×12m)', fontsize=14)
+                ax2.axis('off')
+                
+                plt.tight_layout()
+                plt.savefig(f"{self.episode_output_dir}/maps/combined/step_{i:02d}.png", dpi=100, bbox_inches='tight')
+                plt.close()
         
-        print(f"[INFO] 保存地图演化:")
-        print(f"  • 全局地图: {self.episode_output_dir}/maps/global/global_step_00~{len(maps_history)-1:02d}.png")
-        print(f"  • 局部地图: {self.episode_output_dir}/maps/local/local_step_00~{len(maps_history)-1:02d}.png")
-        print(f"  • 组合图: {self.episode_output_dir}/maps/combined/combined_step_00~{len(maps_history)-1:02d}.png")
+        print(f"✓ 保存 {len(maps_history)} 帧地图")
     
     def _print_final_statistics(self, maps_history):
         """打印最终统计信息"""
@@ -541,25 +490,15 @@ class MinimalMappingTest:
         final_pose = maps_history[-1]['full_pose'][0]
         final_floor = maps_history[-1]['floor']
         
-        print("\n" + "="*60)
-        print("📊 建图统计信息")
-        print("="*60)
-        print(f"Episode ID: {self.episode_id}")
-        print(f"检测到的类别数: {len(self.detected_classes)}")
-        print(f"类别列表: {list(self.detected_classes)}")
-        print()
-        print("�️ 地图覆盖:")
         total_pixels = final_map.shape[1] * final_map.shape[2]
-        print(f"  • 全局地图: {final_map.shape[1]}×{final_map.shape[2]} pixels ({final_map.shape[1]*self.resolution/100:.1f}m × {final_map.shape[2]*self.resolution/100:.1f}m)")
-        print(f"  • 已探索: {np.sum(final_map[1] > 0):,} pixels ({np.sum(final_map[1] > 0) / total_pixels * 100:.1f}%)")
-        print(f"  • 障碍物: {np.sum(final_map[0] > 0):,} pixels")
-        print(f"  • 地板: {np.sum(final_floor > 0):,} pixels")
-        print()
-        print("📌 最终位姿:")
-        print(f"  • x = {final_pose[0]:.2f} m")
-        print(f"  • y = {final_pose[1]:.2f} m")
-        print(f"  • θ = {final_pose[2]:.2f} rad ({np.degrees(final_pose[2]):.1f}°)")
-        print("="*60)
+        explored_pixels = np.sum(final_map[1] > 0)
+        
+        print(f"\n{'='*50}")
+        print(f"Episode {self.episode_id} | Scene: {self.scene_id}")
+        print(f"检测类别 ({len(self.detected_classes)}): {list(self.detected_classes)[:5]}...")
+        print(f"探索率: {explored_pixels / total_pixels * 100:.1f}%")
+        print(f"最终位姿: x={final_pose[0]:.1f}m, y={final_pose[1]:.1f}m, θ={np.degrees(final_pose[2]):.0f}°")
+        print(f"{'='*50}")
     
     def run(self):
         """运行完整测试"""
