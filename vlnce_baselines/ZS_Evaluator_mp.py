@@ -425,7 +425,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
         floor = remove_small_objects(floor, min_size=400).astype(bool)
-        floor = binary_closing(floor, selem=disk(kernel_size))
+        floor = binary_closing(floor, footprint=disk(kernel_size))
         
         return floor
         
