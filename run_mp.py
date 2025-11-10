@@ -89,18 +89,30 @@ def run_exp(exp_name, exp_config, run_type, nprocesses, opts):
         shared_config.freeze()
         configs.append(shared_config)
     
-    # ① 创建进程池 (16 个进程)
-    pool = Pool(processes=nprocesses)
-    
-    # ② 并行执行 worker 函数
-    pool.map(worker, configs)
-    # 等价于:
-    # for config in configs:
-    #     worker(config)  # 但是是并行的
-    
-    # ③ 关闭进程池
-    pool.close()  # 不再接受新任务
-    pool.join()   # 等待所有任务完成
+    # 检测是否为键盘控制模式（单进程直接运行）
+    if config.KEYBOARD_CONTROL:
+        print("=" * 60)
+        print("KEYBOARD CONTROL MODE - Running in main process")
+        print("=" * 60)
+        # 直接在主进程运行第一个配置（避免 multiprocessing input() 问题）
+        worker(configs[0])
+        print("\n" + "=" * 60)
+        print("KEYBOARD CONTROL SESSION ENDED")
+        print("=" * 60)
+        return  # 键盘控制模式不需要聚合结果
+    else:
+        # ① 创建进程池 (16 个进程)
+        pool = Pool(processes=nprocesses)
+        
+        # ② 并行执行 worker 函数
+        pool.map(worker, configs)
+        # 等价于:
+        # for config in configs:
+        #     worker(config)  # 但是是并行的
+        
+        # ③ 关闭进程池
+        pool.close()  # 不再接受新任务
+        pool.join()   # 等待所有任务完成
 
     # ① 找到所有进程输出的结果文件
     fns = glob.glob(config.CHECKPOINT_FOLDER + '/stats_ep_ckpt_*.json')
