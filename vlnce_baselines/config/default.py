@@ -19,12 +19,14 @@ _C.VIDEO_OPTION = []  # options: "disk", "tensorboard"
 _C.VIDEO_DIR = "videos/debug"
 _C.TENSORBOARD_DIR = "data/tensorboard_dirs/debug"
 _C.RESULTS_DIR = "data/checkpoints/pretrained/evals"
-_C.BLIP2_MODEL_DIR = "data/blip2/blip2_model.pt"
-_C.BLIP2_VIS_PROCESSORS_DIR = "data/blip2/blip2_vis_processors.pt"
-_C.BLIP2_TEXT_PROCESSORS_DIR = "data/blip2/blip2_text_processors.pt"
-_C.VQA_MODEL_DIR = "data/vqa/vqa_model.pt"
-_C.VQA_VIS_PROCESSORS_DIR = "data/vqa/vqa_vis_processors.pt"
-_C.VQA_TEXT_PROCESSORS_DIR = "data/vqa/vqa_text_processors.pt"
+# BLIP2 模型路径（根据实际路径修改）
+_C.BLIP2_MODEL_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_model.pt"
+_C.BLIP2_VIS_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_vis_processors.pt"
+_C.BLIP2_TEXT_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_text_processors.pt"
+# VQA 模型路径（根据实际路径修改）
+_C.VQA_MODEL_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_model.pt"
+_C.VQA_VIS_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_vis_processors.pt"
+_C.VQA_TEXT_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_text_processors.pt"
 _C.KEYBOARD_CONTROL = 0
 
 # -----------------------------------------------------------------------------
