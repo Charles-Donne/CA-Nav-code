@@ -61,7 +61,7 @@ class LLMSensor(Sensor):
         return SensorTypes.TEXT
     
     def _get_observation_space(self, *args: Any, **kwargs: Any) -> spaces.Space:
-        return spaces.Discrete(0)
+        return spaces.Dict({})
     
     def get_observation(self, observations, *args: Any, episode, **kwargs: Any) -> Dict:
         return episode.llm_reply

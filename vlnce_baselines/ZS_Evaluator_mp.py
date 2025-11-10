@@ -922,6 +922,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                 search_destination = True  # 开始搜索最终目标
                 print("start to search destination")
                 
+                
             # ┌─────────────────────────────────────────────────────────────┐
             # │ 4.5 约束检查和子任务切换 (状态机核心逻辑)                    │
             # └─────────────────────────────────────────────────────────────┘
