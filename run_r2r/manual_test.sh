@@ -13,6 +13,8 @@ echo "=========================================="
 echo "手动键盘控制测试"
 echo "Episode ID: $EPISODE_ID"
 echo "按键: w=前进, a=左转, d=右转, 其他=停止"
+echo "可视化: 开启实时显示 + 保存图像"
+echo "输出目录: data/logs/eval_results/manual_test/"
 echo "=========================================="
 
 flag=" --exp_name manual_test
@@ -25,8 +27,9 @@ flag=" --exp_name manual_test
       SIMULATOR_GPU_IDS [0]
       KEYBOARD_CONTROL 1
       TASK_CONFIG.DATASET.EPISODES_ALLOWED [$EPISODE_ID]
-      MAP.VISUALIZE False
-      MAP.PRINT_IMAGES False
+      MAP.VISUALIZE True
+      MAP.PRINT_IMAGES True
+      EVAL.SAVE_RESULTS True
       "
 
 CUDA_VISIBLE_DEVICES=0 python run_mp.py $flag
