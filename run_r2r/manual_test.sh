@@ -25,6 +25,8 @@ flag=" --exp_name manual_test
       SIMULATOR_GPU_IDS [0]
       KEYBOARD_CONTROL 1
       TASK_CONFIG.DATASET.EPISODES_ALLOWED [$EPISODE_ID]
+      MAP.VISUALIZE False
+      MAP.PRINT_IMAGES False
       "
 
 CUDA_VISIBLE_DEVICES=0 python run_mp.py $flag

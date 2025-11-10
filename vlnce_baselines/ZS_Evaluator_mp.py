@@ -448,18 +448,18 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         objects = np.sum(full_map[map_channels:, ...][not_navigable_index], axis=0).astype(bool)  # 不可导航物体
         
         # 形态学处理（闭运算，填充小孔）
-        selem = disk(kernel_size)
-        obstacles_closed = binary_closing(obstacles, selem=selem)
-        objects_closed = binary_closing(objects, selem=selem)
+        footprint = disk(kernel_size)
+        obstacles_closed = binary_closing(obstacles, footprint=footprint)
+        objects_closed = binary_closing(objects, footprint=footprint)
         navigable = np.logical_or.reduce(full_map[map_channels:, ...][navigable_index])
         navigable = np.logical_and(navigable, np.logical_not(objects))
-        navigable_closed = binary_closing(navigable, selem=selem)
+        navigable_closed = binary_closing(navigable, footprint=footprint)
         
         # 计算不可穿越区域
         untraversible = np.logical_or(objects_closed, obstacles_closed)
         untraversible[navigable_closed == 1] = 0
         untraversible = remove_small_objects(untraversible, min_size=64)
-        untraversible = binary_closing(untraversible, selem=disk(3))
+        untraversible = binary_closing(untraversible, footprint=disk(3))
         traversible = np.logical_not(untraversible)
 
         # 计算地板区域
@@ -467,11 +467,11 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         free_mask = np.logical_or(free_mask, navigable)
         floor = explored_area * free_mask
         floor = remove_small_objects(floor, min_size=400).astype(bool)
-        floor = binary_closing(floor, selem=selem)
+        floor = binary_closing(floor, footprint=footprint)
         traversible = np.logical_or(floor, traversible)
         
         # 计算边界（探索边缘）
-        explored_area = binary_closing(explored_area, selem=selem)
+        explored_area = binary_closing(explored_area, footprint=footprint)
         contours, _ = cv2.findContours(explored_area.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         image = np.zeros(full_map.shape[-2:], dtype=np.uint8)
         image = cv2.drawContours(image, contours, -1, (255, 255, 255), thickness=3)
