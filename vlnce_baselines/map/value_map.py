@@ -70,9 +70,21 @@ class ValueMap(nn.Module):
         # 修复新版 transformers (>4.27) 的 BertTokenizer 兼容性
         if hasattr(self.model, 'tokenizer'):
             tokenizer = self.model.tokenizer
+            # 修复 unique_no_split_tokens
             if not hasattr(tokenizer, 'unique_no_split_tokens'):
-                # unique_no_split_tokens 在新版中被移除，用 all_special_tokens 替代
                 tokenizer.unique_no_split_tokens = list(set(tokenizer.all_special_tokens))
+            # 修复 added_tokens_encoder（新版改为 _added_tokens_encoder）
+            if not hasattr(tokenizer, 'added_tokens_encoder'):
+                if hasattr(tokenizer, '_added_tokens_encoder'):
+                    tokenizer.added_tokens_encoder = tokenizer._added_tokens_encoder
+                else:
+                    tokenizer.added_tokens_encoder = {}
+            # 修复 added_tokens_decoder
+            if not hasattr(tokenizer, 'added_tokens_decoder'):
+                if hasattr(tokenizer, '_added_tokens_decoder'):
+                    tokenizer.added_tokens_decoder = tokenizer._added_tokens_decoder
+                else:
+                    tokenizer.added_tokens_decoder = {}
     
     def _calculate_confidence(self, theta: np.ndarray) -> np.float64:
         return (np.cos(0.5 * np.pi * theta / (self.hfov / 2)))**2
