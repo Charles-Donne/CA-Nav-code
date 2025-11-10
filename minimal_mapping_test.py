@@ -16,7 +16,8 @@ import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 
-from habitat import Config
+from habitat import Config 
+from habitat import make_dataset, Env
 from habitat_baselines.common.environments import get_env_class
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
@@ -67,8 +68,7 @@ class MinimalMappingTest:
         """初始化环境（使用 episode_index 直接选择）"""
         print("\n[STEP 1] 初始化 Habitat 环境...")
         
-        # 导入 make_dataset
-        from habitat import make_dataset, Env
+
         
         # 加载数据集（直接使用原始配置，像 llm_vlm_control.py 一样）
         print("Loading dataset...")
