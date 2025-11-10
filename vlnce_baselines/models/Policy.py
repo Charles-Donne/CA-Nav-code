@@ -136,16 +136,19 @@ class FusionMapPolicy(nn.Module):
         else:
             relative_angle, action = angle_and_direction(heading_vector, waypoint_vector, self.turn_angle)
         
-        if self.visualize:
+        # 准备可视化数据（visualize 或 print_images 都需要）
+        if self.visualize or self.print_images:
             normalized_data = ((planner.fmm_dist - np.min(planner.fmm_dist)) / 
                             (np.max(planner.fmm_dist) - np.min(planner.fmm_dist)) * 255).astype(np.uint8)
             normalized_data = np.stack((normalized_data,) * 3, axis=-1)
             normalized_data = cv2.circle(normalized_data, (int(x), int(y)), radius=5, color=(255,0,0), thickness=1)
             normalized_data = cv2.circle(normalized_data, (waypoint[1], waypoint[0]), 
                                          radius=5, color=(0,0,255), thickness=1)
+        
+        if self.visualize:
             cv2.imshow("fmm distance field", np.flipud(normalized_data))
-            
             cv2.waitKey(1)
+            
         if self.print_images:
             save_dir = os.path.join(self.config.RESULTS_DIR, "fmm_fields/eps_%d"%current_episode_id)
             os.makedirs(save_dir, exist_ok=True)
