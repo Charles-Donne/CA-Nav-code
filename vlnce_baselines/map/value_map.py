@@ -61,6 +61,11 @@ class ValueMap(nn.Module):
         self.model = torch.load(self.config.BLIP2_MODEL_DIR, map_location="cpu").to(self.device)
         self.vis_processors = torch.load(self.config.BLIP2_VIS_PROCESSORS_DIR)["eval"]
         self.text_processors = torch.load(self.config.BLIP2_TEXT_PROCESSORS_DIR)["eval"]
+        
+        # 修复旧版 PyTorch 保存的模型中的 GELU 层（缺少 approximate 属性）
+        for module in self.model.modules():
+            if isinstance(module, nn.GELU) and not hasattr(module, 'approximate'):
+                module.approximate = 'none'
     
     def _calculate_confidence(self, theta: np.ndarray) -> np.float64:
         return (np.cos(0.5 * np.pi * theta / (self.hfov / 2)))**2
