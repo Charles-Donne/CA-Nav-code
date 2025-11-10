@@ -197,7 +197,7 @@ class ValueMap(nn.Module):
         current_value = blip_value
         previous_value = self.value_map[1]
         self._update_value_map(previous_value, current_value, previous_confidence, current_confidence, one_step_floor, mask)
-        if self.visualize:
+        if self.visualize or self.print_images:
             self._visualize(step, current_episode_id)
         
         return self.value_map[1]
@@ -222,8 +222,9 @@ class ValueMap(nn.Module):
         self.vis_image = add_text(self.vis_image, "Confidence Mask", (520, 50))
         self.vis_image = add_text(self.vis_image, "Value Map", (1020, 50))
         
-        cv2.imshow("info", self.vis_image)
-        cv2.waitKey(1)
+        if self.visualize:
+            cv2.imshow("info", self.vis_image)
+            cv2.waitKey(1)
         
         if self.print_images:
             save_dir = os.path.join(self.config.RESULTS_DIR, "floor_confidence_value/eps_%d"%current_episode_id)

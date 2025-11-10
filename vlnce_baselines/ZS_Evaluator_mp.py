@@ -548,6 +548,16 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             # 解包结果: obs=观察, _=奖励(不使用), dones=是否结束, infos=附加信息
             obs, _, dones, infos = [list(x) for x in zip(*outputs)]
             
+            # Save RGB frames if print_images is enabled
+            if self.config.MAP.PRINT_IMAGES:
+                rgb_frame = obs[0]['rgb'].astype(np.uint8)  # Get RGB from observation
+                save_dir = os.path.join(self.config.RESULTS_DIR, "rgb_frames/eps_%d"%self.current_episode_id)
+                os.makedirs(save_dir, exist_ok=True)
+                fn = "{}/step-{}.png".format(save_dir, step)
+                # Convert RGB to BGR for OpenCV
+                bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(fn, bgr_frame)
+            
             # ===== 步骤 2: 检查 episode 是否提前结束 =====
             if dones[0]:
                 # 如果已结束（例如超时、碰撞等），直接返回
@@ -1134,6 +1144,16 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             # 在仿真环境中执行动作
             outputs = self.envs.step(actions)
             obs, _, dones, infos = [list(x) for x in zip(*outputs)]
+            
+            # Save RGB frames if print_images is enabled
+            if self.config.MAP.PRINT_IMAGES:
+                rgb_frame = obs[0]['rgb'].astype(np.uint8)  # Get RGB from observation
+                save_dir = os.path.join(self.config.RESULTS_DIR, "rgb_frames/eps_%d"%self.current_episode_id)
+                os.makedirs(save_dir, exist_ok=True)
+                fn = "{}/step-{}.png".format(save_dir, step)
+                # Convert RGB to BGR for OpenCV
+                bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(fn, bgr_frame)
             
             # ┌─────────────────────────────────────────────────────────────┐
             # │ 4.9 检查 episode 是否结束                                   │

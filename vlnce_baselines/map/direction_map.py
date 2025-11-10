@@ -74,7 +74,7 @@ class DirectionMap(nn.Module):
         else:
             sector_mask = np.ones(self.shape)
         
-        if self.visualize:
+        if self.visualize or self.print_images:
             self._visualize(sector_mask, step, current_episode_id)
         
         return sector_mask
@@ -83,8 +83,10 @@ class DirectionMap(nn.Module):
         direction_map_vis = direction_map.copy()
         direction_map_vis[direction_map_vis == 0] = 1
         direction_map_vis = np.flipud((direction_map * 255).astype(np.uint8))
-        cv2.imshow("history map", direction_map_vis)
-        cv2.waitKey(1)
+        
+        if self.visualize:
+            cv2.imshow("direction map", direction_map_vis)
+            cv2.waitKey(1)
         
         if self.print_images:
             save_dir = os.path.join(self.config.RESULTS_DIR, "direction_map/eps_%d"%current_episode_id)

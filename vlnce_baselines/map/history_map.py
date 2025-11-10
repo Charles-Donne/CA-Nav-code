@@ -35,7 +35,7 @@ class HistoryMap(nn.Module):
         trajectory = self._draw_polyline(trajectory_points)
         self.history_map[trajectory == True] *= alpha
         
-        if self.visualize:
+        if self.visualize or self.print_images:
             self._visualize(self.history_map, step, current_episode_id)
         
         return self.history_map
@@ -44,8 +44,10 @@ class HistoryMap(nn.Module):
         history_map_vis = history_map.copy()
         history_map_vis[history_map_vis == 0] = 1
         history_map_vis = np.flipud((history_map * 255).astype(np.uint8))
-        cv2.imshow("history map", history_map_vis)
-        cv2.waitKey(1)
+        
+        if self.visualize:
+            cv2.imshow("history map", history_map_vis)
+            cv2.waitKey(1)
         
         if self.print_images:
             save_dir = os.path.join(self.config.RESULTS_DIR, "history_map/eps_%d"%current_episode_id)

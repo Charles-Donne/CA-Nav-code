@@ -345,7 +345,7 @@ class Semantic_Mapping(nn.Module):
         #     fn = "{}/step-{}.png".format(save_dir, step)
         #     plt.savefig(fn)
                 
-        if self.visualize:
+        if self.visualize or self.print_images:
             self._visualize(current_episode_id, 
                             id=0,
                             goal=self.goal, 

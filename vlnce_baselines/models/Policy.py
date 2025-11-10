@@ -293,7 +293,7 @@ class FusionMapPolicy(nn.Module):
                                       step, current_episode_id, detected_classes, 
                                       search_destination)
         
-        if self.visualize:
+        if self.visualize or self.print_images:
             if self.fixed_destination is not None:
                 best_waypoint = self.fixed_destination
             self._visualization(value_map, sorted_waypoints, best_waypoint, step, current_episode_id)
@@ -323,8 +323,10 @@ class FusionMapPolicy(nn.Module):
         map_vis = cv2.circle(map_vis, (best_waypoint[1], best_waypoint[0]), radius=5, color=(0,255,0), thickness=1)
         map_vis = np.flipud(map_vis)
         self.vis_image[:, :] = map_vis
-        cv2.imshow("waypoints", self.vis_image)
-        cv2.waitKey(1)
+        
+        if self.visualize:
+            cv2.imshow("waypoints", self.vis_image)
+            cv2.waitKey(1)
         
         if self.print_images:
             save_dir = os.path.join(self.config.RESULTS_DIR, "waypoints/eps_%d"%current_episode_id)
