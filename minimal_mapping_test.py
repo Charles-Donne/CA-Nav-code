@@ -80,7 +80,7 @@ class MinimalMappingTest:
         # 如果指定了instruction_id，尝试切换到对应的episode
         if self.target_instruction_id is not None:
             print(f"[INFO] 正在寻找 Instruction ID: {self.target_instruction_id}...")
-            max_attempts = 500  # 增加尝试次数，因为数据集可能很大
+            max_attempts = 2000  # 增加尝试次数，因为数据集可能很大
             found = False
             
             for attempt in range(max_attempts):
