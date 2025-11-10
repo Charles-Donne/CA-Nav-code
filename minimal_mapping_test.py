@@ -49,16 +49,14 @@ class MinimalMappingTest:
         self.map_shape = (config.MAP.MAP_SIZE_CM // self.resolution,
                           config.MAP.MAP_SIZE_CM // self.resolution)
         
-        # 创建输出目录
+        # 创建输出目录（稍后根据 episode_id 创建子目录）
         self.output_dir = "data/minimal_mapping_test"
         os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(f"{self.output_dir}/maps", exist_ok=True)
-        os.makedirs(f"{self.output_dir}/rgb", exist_ok=True)
-        os.makedirs(f"{self.output_dir}/depth", exist_ok=True)
         
         # Episode 索引（替代 instruction_id）
         self.episode_index = episode_index
         self.env = None  # 单个环境（不是 VectorEnv）
+        self.episode_output_dir = None  # 根据 episode_id 创建的子目录
         
         print(f"[INFO] 输出目录: {self.output_dir}")
         print(f"[INFO] 地图尺寸: {self.map_shape}")
@@ -116,6 +114,15 @@ class MinimalMappingTest:
         print(f"[INFO] Episode ID: {self.episode_id}")
         print(f"[INFO] 场景: {self.scene_id}")
         print(f"[INFO] Instruction: {self.instruction_text[:100]}..." if len(self.instruction_text) > 100 else f"[INFO] Instruction: {self.instruction_text}")
+        
+        # 根据 episode_id 创建输出目录
+        self.episode_output_dir = os.path.join(self.output_dir, f"episode_{self.episode_id}")
+        os.makedirs(self.episode_output_dir, exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/rgb", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/depth", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/semantic", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/maps", exist_ok=True)
+        print(f"[INFO] Episode 输出目录: {self.episode_output_dir}")
         
         return obs
     
@@ -269,6 +276,36 @@ class MinimalMappingTest:
 
         return traversible, floor, frontiers.astype(np.uint8)
     
+    def _save_observation_images(self, step: int, rgb: np.ndarray, depth: np.ndarray, annotated_rgb: np.ndarray):
+        """保存每一步的观察图像
+        
+        Args:
+            step: 当前步数
+            rgb: RGB 图像 (H, W, 3)
+            depth: Depth 图像 (H, W, 1)
+            annotated_rgb: 标注后的 RGB 图像
+        """
+        # 保存原始 RGB
+        rgb_img = Image.fromarray(rgb)
+        rgb_img.save(f"{self.episode_output_dir}/rgb/step_{step:02d}.png")
+        
+        # 保存标注后的 RGB（语义分割可视化）
+        if annotated_rgb is not None:
+            annotated_img = Image.fromarray(annotated_rgb)
+            annotated_img.save(f"{self.episode_output_dir}/semantic/step_{step:02d}_annotated.png")
+        
+        # 保存 Depth（归一化到 0-255 用于可视化）
+        depth_normalized = depth[:, :, 0]  # 去掉通道维度
+        depth_normalized = np.clip(depth_normalized, 50, 550)  # 限制到 50-550cm
+        depth_normalized = ((depth_normalized - 50) / 500 * 255).astype(np.uint8)
+        depth_img = Image.fromarray(depth_normalized)
+        depth_img.save(f"{self.episode_output_dir}/depth/step_{step:02d}.png")
+        
+        # 保存带颜色映射的深度图
+        depth_colored = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+        depth_colored_img = Image.fromarray(cv2.cvtColor(depth_colored, cv2.COLOR_BGR2RGB))
+        depth_colored_img.save(f"{self.episode_output_dir}/depth/step_{step:02d}_colored.png")
+    
     def look_around_and_map(self):
         """环视 360° 并建图 - 12次旋转，每次30°"""
         print("\n[STEP 3] 环视 360° 建图 (12 × 30°)...")
@@ -291,6 +328,9 @@ class MinimalMappingTest:
             
             # ===== 2. 预处理观察 =====
             state, rgb, depth, annotated_rgb = self.preprocess_observation(obs)
+            
+            # ===== 2.1 保存 RGB 和 Depth 图像 =====
+            self._save_observation_images(step, rgb, depth, annotated_rgb)
             
             # ===== 3. 批处理观察 =====
             batch_obs = torch.from_numpy(state[None, ...]).float().to(self.device)
@@ -331,8 +371,8 @@ class MinimalMappingTest:
         print("\n[STEP 4] 保存地图...")
         
         # 保存原始数据
-        np.save(f"{self.output_dir}/maps_history.npy", maps_history)
-        print(f"[INFO] 保存地图历史: {self.output_dir}/maps_history.npy")
+        np.save(f"{self.episode_output_dir}/maps_history.npy", maps_history)
+        print(f"[INFO] 保存地图历史: {self.episode_output_dir}/maps_history.npy")
         
         final_map = maps_history[-1]['full_map'][0]
         final_pose = maps_history[-1]['full_pose'][0]
@@ -408,9 +448,9 @@ class MinimalMappingTest:
         print(f"[INFO] 生成地图演化动画 ({len(maps_history)}帧)...")
         
         # 创建子目录
-        os.makedirs(f"{self.output_dir}/maps/global", exist_ok=True)
-        os.makedirs(f"{self.output_dir}/maps/local", exist_ok=True)
-        os.makedirs(f"{self.output_dir}/maps/combined", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/maps/global", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/maps/local", exist_ok=True)
+        os.makedirs(f"{self.episode_output_dir}/maps/combined", exist_ok=True)
         
         for i, map_data in enumerate(maps_history):
             full_map = map_data['full_map'][0]
@@ -442,7 +482,7 @@ class MinimalMappingTest:
                 ax_global.add_patch(rect)
             
             plt.tight_layout()
-            plt.savefig(f"{self.output_dir}/maps/global/global_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+            plt.savefig(f"{self.episode_output_dir}/maps/global/global_step_{i:02d}.png", dpi=100, bbox_inches='tight')
             plt.close(fig_global)
             
             # ===== 2. 生成局部地图（单独） =====
@@ -465,7 +505,7 @@ class MinimalMappingTest:
                 ax_local.set_title(f'Local Map (12m×12m) - Step {i+1}/{len(maps_history)}', fontsize=14)
                 ax_local.axis('off')
                 plt.tight_layout()
-                plt.savefig(f"{self.output_dir}/maps/local/local_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+                plt.savefig(f"{self.episode_output_dir}/maps/local/local_step_{i:02d}.png", dpi=100, bbox_inches='tight')
                 plt.close(fig_local)
             
             # ===== 3. 生成组合图（全局+局部） =====
@@ -487,13 +527,13 @@ class MinimalMappingTest:
             ax2.axis('off')
             
             plt.tight_layout()
-            plt.savefig(f"{self.output_dir}/maps/combined/combined_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+            plt.savefig(f"{self.episode_output_dir}/maps/combined/combined_step_{i:02d}.png", dpi=100, bbox_inches='tight')
             plt.close()
         
         print(f"[INFO] 保存地图演化:")
-        print(f"  • 全局地图: {self.output_dir}/maps/global/global_step_00~{len(maps_history)-1:02d}.png")
-        print(f"  • 局部地图: {self.output_dir}/maps/local/local_step_00~{len(maps_history)-1:02d}.png")
-        print(f"  • 组合图: {self.output_dir}/maps/combined/combined_step_00~{len(maps_history)-1:02d}.png")
+        print(f"  • 全局地图: {self.episode_output_dir}/maps/global/global_step_00~{len(maps_history)-1:02d}.png")
+        print(f"  • 局部地图: {self.episode_output_dir}/maps/local/local_step_00~{len(maps_history)-1:02d}.png")
+        print(f"  • 组合图: {self.episode_output_dir}/maps/combined/combined_step_00~{len(maps_history)-1:02d}.png")
     
     def _print_final_statistics(self, maps_history):
         """打印最终统计信息"""
@@ -537,7 +577,17 @@ class MinimalMappingTest:
             self.save_maps(maps_history)
             
             print("\n[SUCCESS] 测试完成！")
-            print(f"[INFO] 查看结果: {self.output_dir}/")
+            print(f"[INFO] 查看结果: {self.episode_output_dir}/")
+            print(f"\n📁 输出目录结构:")
+            print(f"  {self.episode_output_dir}/")
+            print(f"  ├── rgb/              (RGB 图像，每步一张)")
+            print(f"  ├── depth/            (深度图像，灰度 + 彩色)")
+            print(f"  ├── semantic/         (语义分割标注)")
+            print(f"  ├── maps/")
+            print(f"  │   ├── global/       (全局地图演化)")
+            print(f"  │   ├── local/        (局部地图演化)")
+            print(f"  │   └── combined/     (全局+局部组合)")
+            print(f"  └── maps_history.npy  (原始地图数据)")
             
         except Exception as e:
             print(f"\n[ERROR] 测试失败: {e}")
