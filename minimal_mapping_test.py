@@ -55,6 +55,9 @@ class MinimalMappingTest:
         os.makedirs(f"{self.output_dir}/rgb", exist_ok=True)
         os.makedirs(f"{self.output_dir}/depth", exist_ok=True)
         
+        # 目标instruction ID（可选）
+        self.target_instruction_id = None
+        
         print(f"[INFO] 输出目录: {self.output_dir}")
         print(f"[INFO] 地图尺寸: {self.map_shape}")
         print(f"[INFO] 地图分辨率: {self.resolution} cm/pixel")
@@ -72,10 +75,53 @@ class MinimalMappingTest:
         
         # 重置环境
         obs = self.envs.reset()
-        self.episode_id = self.envs.current_episodes()[0].episode_id
+        current_episode = self.envs.current_episodes()[0]
+        
+        # 如果指定了instruction_id，尝试切换到对应的episode
+        if self.target_instruction_id is not None:
+            print(f"[INFO] 正在寻找 Instruction ID: {self.target_instruction_id}...")
+            max_attempts = 500  # 增加尝试次数，因为数据集可能很大
+            found = False
+            
+            for attempt in range(max_attempts):
+                # 检查当前episode的instruction_id
+                if hasattr(current_episode, 'instruction') and hasattr(current_episode.instruction, 'instruction_id'):
+                    current_id = current_episode.instruction.instruction_id
+                elif hasattr(current_episode, 'instruction_id'):
+                    current_id = current_episode.instruction_id
+                else:
+                    # 尝试从episode_id提取（有些数据集用episode_id作为instruction_id）
+                    current_id = current_episode.episode_id
+                
+                if str(current_id) == str(self.target_instruction_id):
+                    print(f"[INFO] 找到匹配的Instruction！(尝试 {attempt+1}/{max_attempts})")
+                    found = True
+                    break
+                
+                # 重新reset尝试下一个episode
+                obs = self.envs.reset()
+                current_episode = self.envs.current_episodes()[0]
+            
+            if not found:
+                print(f"[WARNING] 未找到Instruction ID {self.target_instruction_id}，使用当前Episode")
+        
+        self.episode_id = current_episode.episode_id
+        self.scene_id = current_episode.scene_id.split('/')[-1].split('.')[0]  # 提取场景名称
+        
+        # 尝试获取instruction信息
+        if hasattr(current_episode, 'instruction'):
+            if hasattr(current_episode.instruction, 'instruction_text'):
+                self.instruction_text = current_episode.instruction.instruction_text
+            elif hasattr(current_episode.instruction, 'text'):
+                self.instruction_text = current_episode.instruction.text
+            else:
+                self.instruction_text = str(current_episode.instruction)
+        else:
+            self.instruction_text = "No instruction available"
         
         print(f"[INFO] Episode ID: {self.episode_id}")
-        print(f"[INFO] 场景: {self.envs.current_episodes()[0].scene_id}")
+        print(f"[INFO] 场景: {self.scene_id}")
+        print(f"[INFO] Instruction: {self.instruction_text[:100]}..." if len(self.instruction_text) > 100 else f"[INFO] Instruction: {self.instruction_text}")
         
         return obs[0]
     
@@ -372,6 +418,11 @@ class MinimalMappingTest:
         """保存地图演化过程（全局地图 + 局部地图）"""
         print(f"[INFO] 生成地图演化动画 ({len(maps_history)}帧)...")
         
+        # 创建子目录
+        os.makedirs(f"{self.output_dir}/maps/global", exist_ok=True)
+        os.makedirs(f"{self.output_dir}/maps/local", exist_ok=True)
+        os.makedirs(f"{self.output_dir}/maps/combined", exist_ok=True)
+        
         for i, map_data in enumerate(maps_history):
             full_map = map_data['full_map'][0]
             full_pose = map_data['full_pose'][0]
@@ -383,24 +434,29 @@ class MinimalMappingTest:
             else:
                 lmb = None
             
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-            
-            # ===== 左侧：全局地图 =====
+            # ===== 1. 生成全局地图（单独） =====
             global_colored = self._create_colored_map(
                 full_map[0], floor, full_pose, "Global Map"
             )
-            ax1.imshow(global_colored)
-            ax1.set_title(f'Global Map - Step {i+1}/{len(maps_history)} (Rotation {(i+1)*30}°)', fontsize=14)
-            ax1.axis('off')
             
-            # 标记局部地图边界
+            # 保存全局地图（带红框标注）
+            fig_global = plt.figure(figsize=(10, 10))
+            ax_global = fig_global.add_subplot(111)
+            ax_global.imshow(global_colored)
+            ax_global.set_title(f'Global Map - Step {i+1}/{len(maps_history)} (Rotation {(i+1)*30}°)', fontsize=14)
+            ax_global.axis('off')
+            
             if lmb is not None:
                 from matplotlib.patches import Rectangle
                 rect = Rectangle((lmb[2], lmb[0]), lmb[3]-lmb[2], lmb[1]-lmb[0],
                                fill=False, edgecolor='red', linewidth=2, linestyle='--')
-                ax1.add_patch(rect)
+                ax_global.add_patch(rect)
             
-            # ===== 右侧：局部地图 =====
+            plt.tight_layout()
+            plt.savefig(f"{self.output_dir}/maps/global/global_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+            plt.close(fig_global)
+            
+            # ===== 2. 生成局部地图（单独） =====
             if lmb is not None:
                 local_obstacles = full_map[0, lmb[0]:lmb[1], lmb[2]:lmb[3]]
                 local_floor = floor[lmb[0]:lmb[1], lmb[2]:lmb[3]]
@@ -413,6 +469,28 @@ class MinimalMappingTest:
                 local_colored = self._create_colored_map(
                     local_obstacles, local_floor, local_pose, "Local Map"
                 )
+                
+                fig_local = plt.figure(figsize=(8, 8))
+                ax_local = fig_local.add_subplot(111)
+                ax_local.imshow(local_colored)
+                ax_local.set_title(f'Local Map (12m×12m) - Step {i+1}/{len(maps_history)}', fontsize=14)
+                ax_local.axis('off')
+                plt.tight_layout()
+                plt.savefig(f"{self.output_dir}/maps/local/local_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+                plt.close(fig_local)
+            
+            # ===== 3. 生成组合图（全局+局部） =====
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+            
+            ax1.imshow(global_colored)
+            ax1.set_title(f'Global Map - Step {i+1}/{len(maps_history)} (Rotation {(i+1)*30}°)', fontsize=14)
+            ax1.axis('off')
+            
+            if lmb is not None:
+                rect = Rectangle((lmb[2], lmb[0]), lmb[3]-lmb[2], lmb[1]-lmb[0],
+                               fill=False, edgecolor='red', linewidth=2, linestyle='--')
+                ax1.add_patch(rect)
+                
                 ax2.imshow(local_colored)
                 ax2.set_title(f'Local Map (12m×12m) - Step {i+1}/{len(maps_history)}', fontsize=14)
             else:
@@ -420,10 +498,13 @@ class MinimalMappingTest:
             ax2.axis('off')
             
             plt.tight_layout()
-            plt.savefig(f"{self.output_dir}/maps/map_step_{i:02d}.png", dpi=100, bbox_inches='tight')
+            plt.savefig(f"{self.output_dir}/maps/combined/combined_step_{i:02d}.png", dpi=100, bbox_inches='tight')
             plt.close()
         
-        print(f"[INFO] 保存地图演化: {self.output_dir}/maps/map_step_00~{len(maps_history)-1:02d}.png")
+        print(f"[INFO] 保存地图演化:")
+        print(f"  • 全局地图: {self.output_dir}/maps/global/global_step_00~{len(maps_history)-1:02d}.png")
+        print(f"  • 局部地图: {self.output_dir}/maps/local/local_step_00~{len(maps_history)-1:02d}.png")
+        print(f"  • 组合图: {self.output_dir}/maps/combined/combined_step_00~{len(maps_history)-1:02d}.png")
     
     def _print_final_statistics(self, maps_history):
         """打印最终统计信息"""
@@ -492,6 +573,12 @@ def main():
         help="配置文件路径"
     )
     parser.add_argument(
+        "--instruction-id",
+        type=str,
+        default=None,
+        help="指定Instruction ID (例如: 1234)"
+    )
+    parser.add_argument(
         "opts",
         default=None,
         nargs=argparse.REMAINDER,
@@ -509,10 +596,20 @@ def main():
     config.SIMULATOR_GPU_IDS = [0]
     config.MAP.VISUALIZE = False
     config.MAP.PRINT_IMAGES = False
+    
+    # 如果指定了instruction_id
+    if args.instruction_id is not None:
+        print(f"\n[INFO] 目标Instruction ID: {args.instruction_id}")
+    
     config.freeze()
     
     # 运行测试
     tester = MinimalMappingTest(config)
+    
+    # 设置目标instruction_id
+    if args.instruction_id is not None:
+        tester.target_instruction_id = args.instruction_id
+    
     tester.run()
 
 
