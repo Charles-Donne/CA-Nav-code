@@ -492,6 +492,79 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
 
         return traversible, floor, frontiers.astype(np.uint8)
     
+    def _save_floor_semantic_map(self, step: int, episode_id: int, full_map: np.ndarray):
+        """保存包含floor语义层的分割地图可视化
+        
+        Args:
+            step: 当前步数
+            episode_id: episode ID
+            full_map: 完整语义地图 (N+1, 480, 480)
+        """
+        # 提取各通道
+        obstacles = full_map[0, ...].astype(bool)     # 障碍物（纯几何，高度>智能体）
+        explored = full_map[1, ...].astype(bool)      # 已探索
+        
+        # 创建彩色可视化 (480, 480, 3)
+        h, w = obstacles.shape
+        vis_image = np.zeros((h, w, 3), dtype=np.uint8)
+        
+        # 颜色方案：
+        # - 黑色 (0,0,0): 未探索区域
+        # - 白色 (255,255,255): 探索过的空地（无障碍无物体）
+        # - 深灰色 (64,64,64): 障碍物（高度判断，墙体等）
+        # - 亮绿色 (0,255,0): floor语义层（可行走地板）
+        # - 红/蓝/黄/紫等: 各种语义物体（table, chair, kitchen等）
+        
+        # 1. 未探索区域 = 黑色（默认）
+        
+        # 2. 已探索区域 = 白色背景
+        vis_image[explored] = [255, 255, 255]
+        
+        # 3. 先绘制所有语义物体（彩色）
+        if full_map.shape[0] > 4:  # 有语义通道
+            semantic_channels = full_map[4:, ...]  # 所有语义通道
+            
+            # 为每个检测类别分配独特颜色
+            color_palette = [
+                [255, 0, 0],      # 0: 红色 (如 table)
+                [0, 0, 255],      # 1: 蓝色 (如 chair)
+                [255, 255, 0],    # 2: 黄色 (如 bed)
+                [255, 0, 255],    # 3: 品红 (如 sofa)
+                [0, 255, 255],    # 4: 青色 (如 cabinet)
+                [255, 128, 0],    # 5: 橙色 (如 counter)
+                [128, 0, 255],    # 6: 紫色 (如 sink)
+                [0, 128, 255],    # 7: 天蓝 (如 refrigerator)
+                [255, 128, 128],  # 8: 粉红
+                [128, 255, 128],  # 9: 浅绿
+                [128, 128, 255],  # 10: 浅蓝
+                [255, 255, 128],  # 11: 浅黄
+            ]
+            
+            # 绘制每个检测到的语义类别
+            for i, class_name in enumerate(self.detected_classes):
+                if i >= semantic_channels.shape[0]:
+                    break
+                class_mask = semantic_channels[i] > 0.5  # 置信度阈值
+                if np.any(class_mask):
+                    color = color_palette[i % len(color_palette)]
+                    vis_image[class_mask] = color
+        
+        # 4. Floor语义层 = 亮绿色（高优先级，覆盖部分语义物体）
+        floor_overlay = self.floor.astype(bool)
+        vis_image[floor_overlay] = [0, 255, 0]
+        
+        # 5. 障碍物（纯几何高度判断）= 深灰色（最高优先级）
+        vis_image[obstacles] = [64, 64, 64]
+        
+        # 翻转图像（与其他地图可视化保持一致）
+        vis_image = np.flipud(vis_image)
+        
+        # 保存图像
+        save_dir = os.path.join(self.config.RESULTS_DIR, "floor_semantic_map/eps_%d" % episode_id)
+        os.makedirs(save_dir, exist_ok=True)
+        fn = "{}/step-{}.png".format(save_dir, step)
+        cv2.imwrite(fn, vis_image)
+    
     def _maps_initialization(self):
         """初始化地图：重置环境 + 解析指令 + 初始化语义地图"""
         obs = self.envs.reset()  # 重置环境，获取初始观察
@@ -631,6 +704,10 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             #   floor: (480, 480) bool 地板区域
             #   frontiers: (480, 480) uint8 探索边界
             self.traversible, self.floor, self.frontiers = self._process_map(step, full_map[0])
+            
+            # Save floor map visualization if print_images is enabled
+            if self.config.MAP.PRINT_IMAGES:
+                self._save_floor_semantic_map(step, self.current_episode_id, full_map[0])
             
             # 4.2 处理当前步新探索的地板
             # 只处理 one_step_full_map，用于价值图计算
@@ -1196,6 +1273,10 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             #   - floor: 地板区域 (可行走的平面)
             #   - frontiers: 探索边界 (已探索区域的轮廓)
             self.traversible, self.floor, self.frontiers = self._process_map(step, full_map[0])
+            
+            # Save floor map visualization if print_images is enabled
+            if self.config.MAP.PRINT_IMAGES:
+                self._save_floor_semantic_map(step, self.current_episode_id, full_map[0])
             
             # 处理当前步新探索的地板 (用于价值图的探索奖励)
             self.one_step_floor = self._process_one_step_floor(one_step_full_map[0])
