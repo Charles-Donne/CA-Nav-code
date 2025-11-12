@@ -406,7 +406,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             else:
                 return llm_destination
         
-        
+
         self.llm_reply = obs['llm_reply']
         self.instruction = obs['instruction']['text']  # 原始指令
         self.sub_instructions = self.llm_reply['sub-instructions']  # 子指令列表
@@ -420,7 +420,6 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         self.destination_class = [item[0] for item in first_landmarks]  # 目标类别列表
         self.classes = self._process_classes(self.base_classes, self.destination_class)  # 更新检测类别
         self.constraints_check = [False] * len(self.sub_constraints)  # 约束检查状态（未完成）
-    
     
     def _process_one_step_floor(self, one_step_full_map: np.ndarray, kernel_size: int=3) -> np.ndarray:
         """处理当前步新探索的地板区域"""
