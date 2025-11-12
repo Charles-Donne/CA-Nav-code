@@ -406,8 +406,6 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             else:
                 return llm_destination
         
-
-
         self.llm_reply = obs['llm_reply']
         self.instruction = obs['instruction']['text']  # 原始指令
         self.sub_instructions = self.llm_reply['sub-instructions']  # 子指令列表
