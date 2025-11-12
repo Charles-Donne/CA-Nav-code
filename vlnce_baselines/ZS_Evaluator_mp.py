@@ -557,15 +557,11 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         # 5. 障碍物（纯几何高度判断）= 黑色（最高优先级）
         vis_image[obstacles] = [0, 0, 0]
         
-        # 翻转图像（与其他地图可视化保持一致）
-        vis_image = np.flipud(vis_image)
-        
-        # 6. 绘制当前位置和朝向箭头
+        # 6. 绘制当前位置和朝向箭头（在翻转前绘制）
         # 找到当前位置的中心点
-        current_loc_flipped = np.flipud(current_loc)
-        if np.any(current_loc_flipped):
+        if np.any(current_loc):
             # 获取当前位置的质心
-            y_coords, x_coords = np.where(current_loc_flipped)
+            y_coords, x_coords = np.where(current_loc)
             if len(y_coords) > 0:
                 center_y = int(np.mean(y_coords))
                 center_x = int(np.mean(x_coords))
@@ -582,9 +578,9 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                     # 计算箭头终点（箭头长度为20像素）
                     arrow_length = 20
                     # Habitat坐标系：heading=0朝向+X轴（地图右侧）
-                    # OpenCV坐标系：需要转换，y轴向下
+                    # 注意：这里在原始坐标系下，翻转前绘制
                     end_x = int(center_x + arrow_length * np.cos(heading))
-                    end_y = int(center_y - arrow_length * np.sin(heading))  # y轴反向
+                    end_y = int(center_y + arrow_length * np.sin(heading))  # 翻转前y轴方向
                     
                     # 绘制箭头（红色，粗线）
                     cv2.arrowedLine(
@@ -598,6 +594,9 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                     
                     # 绘制中心点（黄色圆点，更醒目）
                     cv2.circle(vis_image, (center_x, center_y), 5, (0, 255, 255), -1)
+        
+        # 7. 翻转图像（与其他地图可视化保持一致）- 在绘制完所有内容后翻转
+        vis_image = np.ascontiguousarray(np.flipud(vis_image))
         
         # 保存图像
         save_dir = os.path.join(self.config.RESULTS_DIR, "floor_semantic_map/eps_%d" % episode_id)
