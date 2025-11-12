@@ -570,8 +570,11 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         
         # Step 9: 翻转图像（与模拟器坐标系一致）
         sem_map_vis = np.flipud(sem_map_vis)
+        # 先转换为numpy数组（必须在drawContours之前）
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB转BGR（OpenCV格式）
+        # 确保内存连续性（在绘制箭头之前）
+        sem_map_vis = np.ascontiguousarray(sem_map_vis)
         
         # Step 10: 绘制智能体箭头（复制mapping.py的逻辑）
         if hasattr(self, 'mapping_module') and hasattr(self.mapping_module, 'full_pose'):
@@ -599,9 +602,6 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
             # 箭头颜色（黄色）
             color = (0, 255, 255)  # BGR格式
             cv2.drawContours(sem_map_vis, [agent_arrow], 0, color, -1)
-        
-        # Step 11: 确保内存连续性
-        sem_map_vis = np.ascontiguousarray(sem_map_vis)
         
         # Step 12: 保存图像
         save_dir = os.path.join(self.config.RESULTS_DIR, "floor_semantic_map/eps_%d" % episode_id)
