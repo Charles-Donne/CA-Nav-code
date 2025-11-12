@@ -11,6 +11,15 @@ from lavis.models import load_model_and_preprocess
 from vlnce_baselines.utils.constant import direction_mapping
 
 
+def _patch_tokenizer(tokenizer):
+    """修复新版transformers与LAVIS的兼容性问题"""
+    if not hasattr(tokenizer, 'added_tokens_encoder'):
+        # 为新版transformers添加旧版API兼容层
+        tokenizer.added_tokens_encoder = {}
+        tokenizer.added_tokens_decoder = {}
+    return tokenizer
+
+
 class ConstraintsMonitor(nn.Module):
     def __init__(self, config: Config, device: torch.device) -> None:
         super().__init__()
@@ -25,11 +34,19 @@ class ConstraintsMonitor(nn.Module):
             load_model_and_preprocess("blip_vqa", model_type="vqav2", device=self.device, is_eval=True)
         self.vis_processors = vis_processors["eval"]
         self.text_processors = text_processors["eval"]
+        
+        # 修复新版transformers兼容性
+        if hasattr(self.model, 'tokenizer'):
+            _patch_tokenizer(self.model.tokenizer)
     
     def _load_from_disk(self):
         self.model = torch.load(self.config.VQA_MODEL_DIR, map_location='cpu').to(self.device)
         self.vis_processors = torch.load(self.config.VQA_VIS_PROCESSORS_DIR)["eval"]
         self.text_processors = torch.load(self.config.VQA_TEXT_PROCESSORS_DIR)["eval"]
+        
+        # 修复新版transformers兼容性
+        if hasattr(self.model, 'tokenizer'):
+            _patch_tokenizer(self.model.tokenizer)
         
     def location_constraint(self, obs: np.ndarray, scene: str):
         """ 

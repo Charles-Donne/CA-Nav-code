@@ -493,116 +493,121 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
     
     def _save_floor_semantic_map(self, step: int, episode_id: int, full_map: np.ndarray):
         """保存包含floor语义层的分割地图可视化
+        基于mapping.py的_visualize方法重写，确保渲染顺序和箭头方向正确
         
         Args:
             step: 当前步数
             episode_id: episode ID
-            full_map: 完整语义地图 (N+1, 480, 480)
+            full_map: 完整语义地图 (N+4, 480, 480)
         """
-        # 提取各通道
-        obstacles = full_map[0, ...].astype(bool)     # 障碍物（纯几何，高度>智能体）
-        explored = full_map[1, ...].astype(bool)      # 已探索
-        current_loc = full_map[2, ...].astype(bool)   # 当前位置
+        # 提取地图通道
+        obstacle_map = full_map[0, ...]  # 障碍物
+        explored_map = full_map[1, ...]  # 已探索
+        current_loc_map = full_map[2, ...]  # 当前位置
         
-        # 创建彩色可视化 (480, 480, 3)
-        h, w = obstacles.shape
-        vis_image = np.zeros((h, w, 3), dtype=np.uint8)
+        # 创建语义地图（使用argmax找到每个像素的主要类别）
+        # 注意：这里+5是为了保留前5个索引给特殊类别
+        semantic_map = full_map[4:, ...].argmax(0) + 5
         
-        # 颜色方案：
-        # - 白色 (255,255,255): 未探索区域
-        # - 浅灰色 (200,200,200): 已探索的空地（无障碍无物体）
-        # - 黑色 (0,0,0): 障碍物（高度判断，墙体等）
-        # - 浅绿色 (144,238,144): floor语义层（可行走地板）
-        # - 红/蓝/黄/紫等: 各种语义物体（table, chair, kitchen等）
+        # 获取地图尺寸
+        h, w = obstacle_map.shape
         
-        # 1. 未探索区域 = 白色（默认背景）
-        vis_image[:] = [255, 255, 255]
+        """
+        颜色映射（palette索引）:
+        0: 未探索区域 (白色)
+        1: 障碍物 (黑色) 
+        2: 已探索空地 (浅灰色)
+        3: 当前不使用
+        4: 当前不使用
+        5+: 语义类别 (根据detected_classes)
+        """
         
-        # 2. 已探索区域 = 浅灰色
-        vis_image[explored] = [200, 200, 200]
+        # Step 1: 找到没有检测到语义类别的像素（背景）
+        not_cat_id = full_map.shape[0]  # 最大索引+1
+        not_cat_mask = (semantic_map == not_cat_id)
         
-        # 3. 先绘制所有语义物体（彩色）
-        if full_map.shape[0] > 4:  # 有语义通道
-            semantic_channels = full_map[4:, ...]  # 所有语义通道
+        # Step 2: 障碍物和已探索区域的掩码
+        obstacle_map_mask = np.rint(obstacle_map) == 1
+        explored_map_mask = np.rint(explored_map) == 1
+        
+        # Step 3: 背景像素设置为0（未探索）
+        semantic_map[not_cat_mask] = 0
+        
+        # Step 4: 已探索的自由空间设置为2（浅灰色）
+        m_free = np.logical_and(not_cat_mask, explored_map_mask)
+        semantic_map[m_free] = 2
+        
+        # Step 5: 障碍物设置为1（黑色）- 覆盖其他所有内容
+        m_obstacle = np.logical_and(not_cat_mask, obstacle_map_mask)
+        semantic_map[m_obstacle] = 1
+        
+        # Step 6: Floor区域单独处理（设置为特定索引4）
+        if hasattr(self, 'floor'):
+            floor_mask = self.floor.astype(bool)
+            # 只在非障碍物区域绘制floor
+            floor_display = np.logical_and(floor_mask, ~obstacle_map_mask)
+            semantic_map[floor_display] = 4  # 使用索引4表示floor
+        
+        # Step 7: 创建调色板（与mapping.py保持一致）
+        from vlnce_baselines.utils.constant import color_palette as base_palette
+        color_pal = [int(x * 255.) for x in base_palette]
+        
+        # 修改调色板中的特定颜色
+        # 索引0 (未探索): 白色
+        color_pal[0:3] = [255, 255, 255]
+        # 索引1 (障碍物): 黑色
+        color_pal[3:6] = [0, 0, 0]
+        # 索引2 (已探索空地): 浅灰色
+        color_pal[6:9] = [200, 200, 200]
+        # 索引4 (floor): 浅绿色
+        color_pal[12:15] = [144, 238, 144]
+        
+        # Step 8: 使用PIL的调色板模式创建图像
+        sem_map_vis = Image.new("P", (w, h))
+        sem_map_vis.putpalette(color_pal)
+        sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
+        sem_map_vis = sem_map_vis.convert("RGB")
+        
+        # Step 9: 翻转图像（与模拟器坐标系一致）
+        sem_map_vis = np.flipud(sem_map_vis)
+        sem_map_vis = np.array(sem_map_vis)
+        sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB转BGR（OpenCV格式）
+        
+        # Step 10: 绘制智能体箭头（复制mapping.py的逻辑）
+        if hasattr(self, 'mapping_module') and hasattr(self.mapping_module, 'full_pose'):
+            full_pose = self.mapping_module.full_pose[0].cpu().numpy() if torch.is_tensor(self.mapping_module.full_pose[0]) else self.mapping_module.full_pose[0]
+            start_x, start_y, start_o = full_pose[0], full_pose[1], full_pose[2]
             
-            # 为每个检测类别分配独特颜色
-            color_palette = [
-                [255, 0, 0],      # 0: 红色 (如 table)
-                [0, 0, 255],      # 1: 蓝色 (如 chair)
-                [255, 255, 0],    # 2: 黄色 (如 bed)
-                [255, 0, 255],    # 3: 品红 (如 sofa)
-                [0, 255, 255],    # 4: 青色 (如 cabinet)
-                [255, 128, 0],    # 5: 橙色 (如 counter)
-                [128, 0, 255],    # 6: 紫色 (如 sink)
-                [0, 128, 255],    # 7: 天蓝 (如 refrigerator)
-                [255, 128, 128],  # 8: 粉红
-                [128, 255, 128],  # 9: 浅绿（注意和floor区分）
-                [128, 128, 255],  # 10: 浅蓝
-                [255, 255, 128],  # 11: 浅黄
-            ]
+            # 计算智能体在地图中的位置（像素坐标）
+            # 注意：这里复制mapping.py中的坐标转换逻辑
+            map_x = start_x * 100.0 / self.resolution  # 米转像素
+            map_y = start_y * 100.0 / self.resolution
             
-            # 绘制每个检测到的语义类别
-            for i, class_name in enumerate(self.detected_classes):
-                if i >= semantic_channels.shape[0]:
-                    break
-                class_mask = semantic_channels[i] > 0.5  # 置信度阈值
-                if np.any(class_mask):
-                    color = color_palette[i % len(color_palette)]
-                    vis_image[class_mask] = color
+            # 位置归一化到地图大小
+            pos_x = map_x * 480 / self.map_shape[0]
+            pos_y = (self.map_shape[1] - map_y) * 480 / self.map_shape[1]
+            
+            # 朝向角度转换（度转弧度，注意负号）
+            pos_o = np.deg2rad(-start_o)
+            
+            pos = (pos_x, pos_y, pos_o)
+            
+            # 使用与mapping.py相同的箭头绘制函数
+            from vlnce_baselines.utils import visualization as vu
+            agent_arrow = vu.get_contour_points(pos, origin=(0, 0))
+            
+            # 箭头颜色（黄色）
+            color = (0, 255, 255)  # BGR格式
+            cv2.drawContours(sem_map_vis, [agent_arrow], 0, color, -1)
         
-        # 4. Floor语义层 = 浅绿色 (144,238,144) Light Green
-        floor_overlay = self.floor.astype(bool)
-        vis_image[floor_overlay] = [144, 238, 144]
+        # Step 11: 确保内存连续性
+        sem_map_vis = np.ascontiguousarray(sem_map_vis)
         
-        # 5. 障碍物（纯几何高度判断）= 黑色（最高优先级）
-        vis_image[obstacles] = [0, 0, 0]
-        
-        # 6. 绘制当前位置和朝向箭头（在翻转前绘制）
-        # 找到当前位置的中心点
-        if np.any(current_loc):
-            # 获取当前位置的质心
-            y_coords, x_coords = np.where(current_loc)
-            if len(y_coords) > 0:
-                center_y = int(np.mean(y_coords))
-                center_x = int(np.mean(x_coords))
-                
-                # 从full_pose获取朝向角度
-                # 注意：这里需要从self.mapping_module获取当前位姿
-                if hasattr(self, 'mapping_module') and hasattr(self.mapping_module, 'full_pose'):
-                    heading = self.mapping_module.full_pose[0, -1]  # 弧度
-                    
-                    # 如果是tensor，转换到CPU并转为numpy
-                    if torch.is_tensor(heading):
-                        heading = heading.cpu().item()
-                    
-                    # 计算箭头终点（箭头长度为20像素）
-                    arrow_length = 20
-                    # Habitat坐标系：heading=0朝向+X轴（地图右侧）
-                    # 注意：这里在原始坐标系下，翻转前绘制
-                    end_x = int(center_x + arrow_length * np.cos(heading))
-                    end_y = int(center_y + arrow_length * np.sin(heading))  # 翻转前y轴方向
-                    
-                    # 绘制箭头（红色，粗线）
-                    cv2.arrowedLine(
-                        vis_image,
-                        (center_x, center_y),  # 起点
-                        (end_x, end_y),        # 终点
-                        (0, 0, 255),           # 红色箭头
-                        thickness=3,           # 线宽
-                        tipLength=0.3          # 箭头尖端长度比例
-                    )
-                    
-                    # 绘制中心点（黄色圆点，更醒目）
-                    cv2.circle(vis_image, (center_x, center_y), 5, (0, 255, 255), -1)
-        
-        # 7. 翻转图像（与其他地图可视化保持一致）- 在绘制完所有内容后翻转
-        vis_image = np.ascontiguousarray(np.flipud(vis_image))
-        
-        # 保存图像
+        # Step 12: 保存图像
         save_dir = os.path.join(self.config.RESULTS_DIR, "floor_semantic_map/eps_%d" % episode_id)
         os.makedirs(save_dir, exist_ok=True)
         fn = "{}/step-{}.png".format(save_dir, step)
-        cv2.imwrite(fn, vis_image)
+        cv2.imwrite(fn, sem_map_vis)
     
     def _maps_initialization(self):
         """初始化地图：重置环境 + 解析指令 + 初始化语义地图"""
