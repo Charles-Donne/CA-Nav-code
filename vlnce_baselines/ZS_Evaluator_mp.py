@@ -575,6 +575,10 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                 if hasattr(self, 'mapping_module') and hasattr(self.mapping_module, 'full_pose'):
                     heading = self.mapping_module.full_pose[0, -1]  # 弧度
                     
+                    # 如果是tensor，转换到CPU并转为numpy
+                    if torch.is_tensor(heading):
+                        heading = heading.cpu().item()
+                    
                     # 计算箭头终点（箭头长度为20像素）
                     arrow_length = 20
                     # Habitat坐标系：heading=0朝向+X轴（地图右侧）
