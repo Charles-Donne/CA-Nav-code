@@ -503,22 +503,24 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
         # 提取各通道
         obstacles = full_map[0, ...].astype(bool)     # 障碍物（纯几何，高度>智能体）
         explored = full_map[1, ...].astype(bool)      # 已探索
+        current_loc = full_map[2, ...].astype(bool)   # 当前位置
         
         # 创建彩色可视化 (480, 480, 3)
         h, w = obstacles.shape
         vis_image = np.zeros((h, w, 3), dtype=np.uint8)
         
         # 颜色方案：
-        # - 黑色 (0,0,0): 未探索区域
-        # - 白色 (255,255,255): 探索过的空地（无障碍无物体）
-        # - 深灰色 (64,64,64): 障碍物（高度判断，墙体等）
-        # - 亮绿色 (0,255,0): floor语义层（可行走地板）
+        # - 白色 (255,255,255): 未探索区域
+        # - 浅灰色 (200,200,200): 已探索的空地（无障碍无物体）
+        # - 黑色 (0,0,0): 障碍物（高度判断，墙体等）
+        # - 浅绿色 (144,238,144): floor语义层（可行走地板）
         # - 红/蓝/黄/紫等: 各种语义物体（table, chair, kitchen等）
         
-        # 1. 未探索区域 = 黑色（默认）
+        # 1. 未探索区域 = 白色（默认背景）
+        vis_image[:] = [255, 255, 255]
         
-        # 2. 已探索区域 = 白色背景
-        vis_image[explored] = [255, 255, 255]
+        # 2. 已探索区域 = 浅灰色
+        vis_image[explored] = [200, 200, 200]
         
         # 3. 先绘制所有语义物体（彩色）
         if full_map.shape[0] > 4:  # 有语义通道
@@ -535,7 +537,7 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                 [128, 0, 255],    # 6: 紫色 (如 sink)
                 [0, 128, 255],    # 7: 天蓝 (如 refrigerator)
                 [255, 128, 128],  # 8: 粉红
-                [128, 255, 128],  # 9: 浅绿
+                [128, 255, 128],  # 9: 浅绿（注意和floor区分）
                 [128, 128, 255],  # 10: 浅蓝
                 [255, 255, 128],  # 11: 浅黄
             ]
@@ -549,15 +551,50 @@ class ZeroShotVlnEvaluatorMP(BaseTrainer):
                     color = color_palette[i % len(color_palette)]
                     vis_image[class_mask] = color
         
-        # 4. Floor语义层 = 亮绿色（高优先级，覆盖部分语义物体）
+        # 4. Floor语义层 = 浅绿色 (144,238,144) Light Green
         floor_overlay = self.floor.astype(bool)
-        vis_image[floor_overlay] = [0, 255, 0]
+        vis_image[floor_overlay] = [144, 238, 144]
         
-        # 5. 障碍物（纯几何高度判断）= 深灰色（最高优先级）
-        vis_image[obstacles] = [64, 64, 64]
+        # 5. 障碍物（纯几何高度判断）= 黑色（最高优先级）
+        vis_image[obstacles] = [0, 0, 0]
         
         # 翻转图像（与其他地图可视化保持一致）
         vis_image = np.flipud(vis_image)
+        
+        # 6. 绘制当前位置和朝向箭头
+        # 找到当前位置的中心点
+        current_loc_flipped = np.flipud(current_loc)
+        if np.any(current_loc_flipped):
+            # 获取当前位置的质心
+            y_coords, x_coords = np.where(current_loc_flipped)
+            if len(y_coords) > 0:
+                center_y = int(np.mean(y_coords))
+                center_x = int(np.mean(x_coords))
+                
+                # 从full_pose获取朝向角度
+                # 注意：这里需要从self.mapping_module获取当前位姿
+                if hasattr(self, 'mapping_module') and hasattr(self.mapping_module, 'full_pose'):
+                    heading = self.mapping_module.full_pose[0, -1]  # 弧度
+                    
+                    # 计算箭头终点（箭头长度为20像素）
+                    arrow_length = 20
+                    # Habitat坐标系：heading=0朝向+X轴（地图右侧）
+                    # OpenCV坐标系：需要转换，y轴向下
+                    end_x = int(center_x + arrow_length * np.cos(heading))
+                    end_y = int(center_y - arrow_length * np.sin(heading))  # y轴反向
+                    
+                    # 绘制箭头（红色，粗线）
+                    cv2.arrowedLine(
+                        vis_image,
+                        (center_x, center_y),  # 起点
+                        (end_x, end_y),        # 终点
+                        (0, 0, 255),           # 红色箭头
+                        thickness=3,           # 线宽
+                        tipLength=0.3          # 箭头尖端长度比例
+                    )
+                    
+                    # 绘制中心点（黄色圆点，更醒目）
+                    cv2.circle(vis_image, (center_x, center_y), 5, (0, 255, 255), -1)
         
         # 保存图像
         save_dir = os.path.join(self.config.RESULTS_DIR, "floor_semantic_map/eps_%d" % episode_id)
